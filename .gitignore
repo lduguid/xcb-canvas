@@ -1,0 +1,8 @@
+wander
+bounce
+pacman
+plat
+*.o
+*.exe
+src/*.o
+src/*.win32.o

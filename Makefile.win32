@@ -1,0 +1,41 @@
+# Cross-compile wander/bounce for Windows. Game sources are unchanged.
+#   make -f Makefile.win32
+#
+# GNU make always defines CC=cc, so do not use CC ?= mingw-gcc here.
+
+MINGW_CC ?= x86_64-w64-mingw32-gcc
+CFLAGS = -std=c11 -Wall -Wextra -O2 -Iinclude -Isrc
+LIBS = -lopengl32 -lgdi32 -luser32 -lwinmm
+
+CORE = src/canvas_core.win32.o
+PLAT = src/canvas_win32.win32.o
+
+all: check-mingw wander.exe bounce.exe pacman.exe plat.exe
+
+check-mingw:
+	@command -v $(MINGW_CC) >/dev/null || { \
+	  echo "Need MinGW-w64. On Debian/Ubuntu/WSL:"; \
+	  echo "  sudo apt install gcc-mingw-w64-x86-64"; \
+	  echo "Then re-run: make -f Makefile.win32"; \
+	  exit 1; }
+
+src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.h
+	$(MINGW_CC) $(CFLAGS) -c -o $@ src/canvas_core.c
+
+src/canvas_win32.win32.o: src/canvas_win32.c src/canvas_internal.h include/canvas.h
+	$(MINGW_CC) $(CFLAGS) -c -o $@ src/canvas_win32.c
+
+wander.exe: games/wander.c $(CORE) $(PLAT)
+	$(MINGW_CC) $(CFLAGS) -o $@ games/wander.c $(CORE) $(PLAT) $(LIBS)
+
+bounce.exe: games/bounce.c $(CORE) $(PLAT)
+	$(MINGW_CC) $(CFLAGS) -o $@ games/bounce.c $(CORE) $(PLAT) $(LIBS)
+
+pacman.exe: games/pacman.c $(CORE) $(PLAT)
+	$(MINGW_CC) $(CFLAGS) -o $@ games/pacman.c $(CORE) $(PLAT) $(LIBS)
+
+plat.exe: games/plat.c $(CORE) $(PLAT)
+	$(MINGW_CC) $(CFLAGS) -o $@ games/plat.c $(CORE) $(PLAT) $(LIBS)
+
+clean:
+	rm -f wander.exe bounce.exe pacman.exe plat.exe src/*.win32.o
