@@ -13,7 +13,7 @@ PLUGINS = $(addsuffix .so,$(GAMES))
 
 all: $(GAMES) canvas $(PLUGINS)
 
-src/canvas_core.o: src/canvas_core.c src/canvas_internal.h include/canvas.h
+src/canvas_core.o: src/canvas_core.c src/canvas_internal.h include/canvas.h src/stb_image.h
 	$(CC) $(CFLAGS) -c -o $@ src/canvas_core.c
 
 src/canvas_x11.o: src/canvas_x11.c src/canvas_internal.h include/canvas.h

@@ -13,100 +13,19 @@
 typedef struct {
     Sprite player;
     Sprite orbs[ORB_N];
-    unsigned tex_player;
+    Sheet tiles;
+    Sheet walk;
     unsigned tex_orb;
-    unsigned tex_grass;
-    unsigned tex_dirt;
     unsigned snd_step, snd_place;
     float bob, step_t;
 } Wander;
 
-static void put_px(unsigned char *p, int w, int x, int y, int r, int g, int b, int a)
+static void load_or_solid(Canvas *c, Sheet *s, const char *path, int cw, int ch)
 {
-    int i = (y * w + x) * 4;
-    p[i] = (unsigned char)r;
-    p[i + 1] = (unsigned char)g;
-    p[i + 2] = (unsigned char)b;
-    p[i + 3] = (unsigned char)a;
-}
-
-static unsigned make_grass(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            int n = ((x * 13 + y * 7) & 7);
-            put_px(px, 16, x, y, 46 + n * 4, 110 + n * 3, 52 + n, 255);
-        }
+    if (!canvas_sheet_load(c, s, path, cw, ch)) {
+        unsigned t = canvas_texture_solid(c, 1.0f, 0.0f, 1.0f);
+        canvas_sheet_init(s, t, cw, ch, cw, ch);
     }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_dirt(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            int n = ((x * 5 + y * 11) & 7);
-            put_px(px, 16, x, y, 92 + n * 3, 70 + n * 2, 42 + n, 255);
-        }
-    }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_player(Canvas *c)
-{
-    /* 4-frame 16x20 strip */
-    const int fw = 16, fh = 20, frames = 4;
-    unsigned char *px = calloc((size_t)fw * frames * fh, 4);
-    int f, x, y;
-
-    for (f = 0; f < frames; f++) {
-        int ox = f * fw;
-        int leg = (f == 1) ? -1 : (f == 3) ? 1 : 0;
-        for (y = 0; y < fh; y++) {
-            for (x = 0; x < fw; x++)
-                put_px(px, fw * frames, ox + x, y, 0, 0, 0, 0);
-        }
-        for (y = 3; y <= 8; y++)
-            for (x = 5; x <= 10; x++)
-                put_px(px, fw * frames, ox + x, y, 240, 210, 170, 255);
-        for (y = 9; y <= 14; y++)
-            for (x = 4; x <= 11; x++)
-                put_px(px, fw * frames, ox + x, y, 40, 90, 180, 255);
-        for (y = 15; y <= 19; y++) {
-            put_px(px, fw * frames, ox + 6 + leg, y, 40, 40, 50, 255);
-            put_px(px, fw * frames, ox + 9 - leg, y, 40, 40, 50, 255);
-        }
-        for (x = 5; x <= 10; x++)
-            put_px(px, fw * frames, ox + x, 2, 30, 30, 35, 255);
-    }
-    {
-        unsigned tex = canvas_texture_rgba(c, fw * frames, fh, px);
-        free(px);
-        return tex;
-    }
-}
-
-static unsigned make_orb(Canvas *c)
-{
-    unsigned char px[12 * 12 * 4];
-    int x, y;
-    for (y = 0; y < 12; y++) {
-        for (x = 0; x < 12; x++) {
-            float dx = x - 5.5f, dy = y - 5.5f;
-            float d = dx * dx + dy * dy;
-            if (d < 22.0f)
-                put_px(px, 12, x, y, 255, 210, 70, 255);
-            else if (d < 28.0f)
-                put_px(px, 12, x, y, 220, 140, 30, 220);
-            else
-                put_px(px, 12, x, y, 0, 0, 0, 0);
-        }
-    }
-    return canvas_texture_rgba(c, 12, 12, px);
 }
 
 static void *init(Canvas *c)
@@ -114,16 +33,16 @@ static void *init(Canvas *c)
     Wander *w = calloc(1, sizeof(*w));
     int i;
 
-    w->tex_grass = make_grass(c);
-    w->tex_dirt = make_dirt(c);
-    w->tex_player = make_player(c);
-    w->tex_orb = make_orb(c);
+    load_or_solid(c, &w->tiles, "assets/wander/tiles.png", 16, 16);
+    load_or_solid(c, &w->walk, "assets/wander/hero.png", 16, 20);
+    w->tex_orb = canvas_texture_file(c, "assets/wander/orb.png");
+    if (!w->tex_orb)
+        w->tex_orb = canvas_texture_solid(c, 1.0f, 0.82f, 0.27f);
 
-    sprite_init(&w->player, WORLD_W * 0.5f, WORLD_H * 0.5f, 32, 40, w->tex_player);
-    w->player.frames = 4;
-    w->player.frame_w = 16;
-    w->player.frame_h = 20;
-    w->player.fps = 8.0f;
+    sprite_from_sheet(&w->player, &w->walk, 0, WORLD_W * 0.5f, WORLD_H * 0.5f);
+    sprite_anim(&w->player, &w->walk, 0, 4, 8.0f);
+    w->player.w = 32.0f;
+    w->player.h = 40.0f;
     w->player.origin_x = 0.5f;
     w->player.origin_y = 1.0f;
 
@@ -241,8 +160,8 @@ static void render(void *state, Canvas *c)
 
     for (ty = y0; ty <= y1; ty++) {
         for (tx = x0; tx <= x1; tx++) {
-            unsigned tex = ((tx + ty) & 7) == 0 ? w->tex_dirt : w->tex_grass;
-            canvas_blit(c, tex, tx * TILE, ty * TILE, TILE, TILE, 0, 0, 1, 1, 1, 1, 1, 1);
+            int cell = ((tx + ty) & 7) == 0 ? 1 : 0;
+            canvas_draw_sheet(c, &w->tiles, cell, tx * TILE, ty * TILE, TILE, TILE);
         }
     }
 

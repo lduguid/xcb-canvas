@@ -59,7 +59,6 @@ typedef struct {
     int id;
     int eaten;
     float wait;
-    float r, g, b;
 } Ghost;
 
 typedef struct {
@@ -69,8 +68,7 @@ typedef struct {
     int score, lives, pellets;
     int won, dead, scatter, mode_i;
     float fright, mouth, flash, mode_t;
-    unsigned tex_pac;
-    unsigned tex_ghost;
+    Sheet pac_sheet, ghost_sheet;
     unsigned snd_waka[2], snd_power, snd_eat, snd_die, snd_win;
     int waka;
 } Pacman;
@@ -161,59 +159,12 @@ static void snap_center(Actor *a)
     a->y = (r + 0.5f) * TILE;
 }
 
-static void put_px(unsigned char *p, int w, int x, int y, int r, int g, int b, int a)
+static void load_or_solid(Canvas *c, Sheet *s, const char *path, int cw, int ch)
 {
-    if (x < 0 || y < 0 || x >= w || y >= w)
-        return;
-    int i = (y * w + x) * 4;
-    p[i] = (unsigned char)r;
-    p[i + 1] = (unsigned char)g;
-    p[i + 2] = (unsigned char)b;
-    p[i + 3] = (unsigned char)a;
-}
-
-static unsigned make_pac_tex(Canvas *c)
-{
-    const int s = 16, frames = 4;
-    unsigned char *px = calloc((size_t)s * frames * s, 4);
-    int f, x, y;
-    for (f = 0; f < frames; f++) {
-        float open = (f == 0) ? 0.08f : (f == 1) ? 0.45f : (f == 2) ? 0.85f : 0.45f;
-        for (y = 0; y < s; y++) {
-            for (x = 0; x < s; x++) {
-                float dx = x - 7.5f, dy = y - 7.5f;
-                float ang = atan2f(dy, dx);
-                float d = dx * dx + dy * dy;
-                int on = d < 49.0f && !(fabsf(ang) < open && d > 4.0f);
-                put_px(px, s * frames, f * s + x, y, on ? 255 : 0, on ? 220 : 0, on ? 0 : 0, on ? 255 : 0);
-            }
-        }
+    if (!canvas_sheet_load(c, s, path, cw, ch)) {
+        unsigned t = canvas_texture_solid(c, 1.0f, 0.85f, 0.0f);
+        canvas_sheet_init(s, t, cw, ch, cw, ch);
     }
-    {
-        unsigned t = canvas_texture_rgba(c, s * frames, s, px);
-        free(px);
-        return t;
-    }
-}
-
-static unsigned make_ghost_tex(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    memset(px, 0, sizeof(px));
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            float dx = x - 7.5f, dy = y - 8.0f;
-            int body = (dx * dx + dy * dy < 46.0f && y < 13) || (y >= 13 && y < 16 && ((x + y) & 1));
-            if (body)
-                put_px(px, 16, x, y, 255, 255, 255, 255);
-        }
-    }
-    put_px(px, 16, 5, 6, 20, 20, 40, 255);
-    put_px(px, 16, 6, 6, 20, 20, 40, 255);
-    put_px(px, 16, 10, 6, 20, 20, 40, 255);
-    put_px(px, 16, 11, 6, 20, 20, 40, 255);
-    return canvas_texture_rgba(c, 16, 16, px);
 }
 
 static void count_pellets(Pacman *p)
@@ -264,23 +215,11 @@ static void *init(Canvas *c)
 {
     Pacman *p = calloc(1, sizeof(*p));
     int i;
-    static const float col[GHOST_N][3] = {
-        {1.00f, 0.20f, 0.15f},
-        {1.00f, 0.72f, 0.85f},
-        {0.20f, 0.90f, 0.95f},
-        {1.00f, 0.62f, 0.12f},
-    };
-
     for (i = 0; i < ROWS; i++)
         memcpy(p->tiles[i], LEVEL[i], COLS);
-    p->tex_pac = make_pac_tex(c);
-    p->tex_ghost = make_ghost_tex(c);
+    load_or_solid(c, &p->pac_sheet, "assets/pacman/pac.png", 16, 16);
+    load_or_solid(c, &p->ghost_sheet, "assets/pacman/ghosts.png", 16, 16);
     p->lives = 3;
-    for (i = 0; i < GHOST_N; i++) {
-        p->ghosts[i].r = col[i][0];
-        p->ghosts[i].g = col[i][1];
-        p->ghosts[i].b = col[i][2];
-    }
     count_pellets(p);
     reset_actors(p);
     p->snd_waka[0] = canvas_sound_tone(c, 620.0f, 70.0f, 0.35f);
@@ -744,10 +683,10 @@ static void render(void *state, Canvas *c)
     draw_maze(p, c);
 
     frame = ((int)p->mouth) & 3;
-    sprite_init(&spr, p->pac.x, p->pac.y, 18, 18, p->tex_pac);
+    sprite_from_sheet(&spr, &p->pac_sheet, 0, p->pac.x, p->pac.y);
+    sprite_anim(&spr, &p->pac_sheet, 0, 4, 0.0f);
+    spr.w = spr.h = 18.0f;
     spr.origin_x = spr.origin_y = 0.5f;
-    spr.frames = 4;
-    spr.frame_w = 16;
     spr.frame = p->dead ? 0 : frame;
     spr.angle = (p->pac.dir == 0) ? 0 : (p->pac.dir == 1) ? 90 : (p->pac.dir == 2) ? 180 : -90;
     spr.visible = !p->dead || ((int)(p->flash * 8) & 1);
@@ -755,7 +694,8 @@ static void render(void *state, Canvas *c)
 
     for (i = 0; i < GHOST_N; i++) {
         Ghost *g = &p->ghosts[i];
-        sprite_init(&spr, g->a.x, g->a.y, 18, 18, p->tex_ghost);
+        sprite_from_sheet(&spr, &p->ghost_sheet, g->id, g->a.x, g->a.y);
+        spr.w = spr.h = 18.0f;
         spr.origin_x = spr.origin_y = 0.5f;
         if (g->eaten) {
             spr.w = spr.h = 10;
@@ -766,10 +706,6 @@ static void render(void *state, Canvas *c)
             spr.r = blink ? 1 : 0.15f;
             spr.g = blink ? 1 : 0.25f;
             spr.b = blink ? 1 : 0.95f;
-        } else {
-            spr.r = g->r;
-            spr.g = g->g;
-            spr.b = g->b;
         }
         canvas_draw_sprite(c, &spr);
     }

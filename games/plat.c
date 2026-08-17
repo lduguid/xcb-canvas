@@ -65,8 +65,7 @@ typedef struct {
     Pop pops[POP_MAX];
     int mob_n, score, coins, lives, won, dead;
     float flash, spawn_x, spawn_y, cam_look;
-    unsigned tex_ground, tex_q, tex_used, tex_brick, tex_coin;
-    unsigned tex_hero, tex_mob, tex_pipe, tex_flag;
+    Sheet tile_sheet, hero_sheet, mob_sheet;
     unsigned snd_jump, snd_coin, snd_bump, snd_stomp, snd_die, snd_win;
     Canvas *cv;
 } Plat;
@@ -87,156 +86,12 @@ static char tile_at(const Plat *p, int c, int r)
     return p->tiles[r][c];
 }
 
-static void put_px(unsigned char *p, int w, int h, int x, int y, int r, int g, int b, int a)
+static void load_or_solid(Canvas *c, Sheet *s, const char *path, int cw, int ch)
 {
-    if (x < 0 || y < 0 || x >= w || y >= h)
-        return;
-    int i = (y * w + x) * 4;
-    p[i] = (unsigned char)r;
-    p[i + 1] = (unsigned char)g;
-    p[i + 2] = (unsigned char)b;
-    p[i + 3] = (unsigned char)a;
-}
-
-static unsigned make_noise_tile(Canvas *c, int r0, int g0, int b0, int nmul)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            int n = ((x * 13 + y * 7) & 7) * nmul;
-            int edge = (x == 0 || y == 0 || x == 15 || y == 15);
-            put_px(px, 16, 16, x, y, r0 + n - (edge ? 25 : 0), g0 + n / 2 - (edge ? 20 : 0),
-                   b0 + n / 3 - (edge ? 15 : 0), 255);
-        }
+    if (!canvas_sheet_load(c, s, path, cw, ch)) {
+        unsigned t = canvas_texture_solid(c, 1.0f, 0.0f, 1.0f);
+        canvas_sheet_init(s, t, cw, ch, cw, ch);
     }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_q_tile(Canvas *c, int used)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            int edge = (x < 2 || y < 2 || x > 13 || y > 13);
-            if (used)
-                put_px(px, 16, 16, x, y, edge ? 90 : 140, edge ? 70 : 110, edge ? 40 : 60, 255);
-            else {
-                int q = (x >= 6 && x <= 9 && y >= 4 && y <= 10 && !(x > 8 && y > 7 && y < 9));
-                if (y >= 12 && y <= 13 && x >= 7 && x <= 8)
-                    q = 1;
-                put_px(px, 16, 16, x, y, q ? 255 : (edge ? 160 : 230), q ? 230 : (edge ? 110 : 180),
-                       q ? 40 : (edge ? 20 : 40), 255);
-            }
-        }
-    }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_coin(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    memset(px, 0, sizeof(px));
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            float dx = (x - 7.5f) / 3.2f, dy = (y - 7.5f) / 5.5f;
-            if (dx * dx + dy * dy < 1.0f)
-                put_px(px, 16, 16, x, y, 255, 210, 50, 255);
-        }
-    }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_hero(Canvas *c)
-{
-    const int fw = 16, fh = 24, frames = 4;
-    unsigned char *px = calloc((size_t)fw * frames * fh, 4);
-    int f, x, y;
-    for (f = 0; f < frames; f++) {
-        int ox = f * fw;
-        int leg = (f == 1) ? -2 : (f == 3) ? 2 : 0;
-        for (y = 2; y <= 6; y++)
-            for (x = 5; x <= 11; x++)
-                put_px(px, fw * frames, fh, ox + x, y, 230, 40, 40, 255);
-        for (x = 4; x <= 12; x++)
-            put_px(px, fw * frames, fh, ox + x, 2, 230, 40, 40, 255);
-        for (y = 7; y <= 11; y++)
-            for (x = 5; x <= 10; x++)
-                put_px(px, fw * frames, fh, ox + x, y, 240, 200, 160, 255);
-        for (y = 12; y <= 18; y++)
-            for (x = 4; x <= 11; x++)
-                put_px(px, fw * frames, fh, ox + x, y, 30, 70, 200, 255);
-        for (y = 19; y <= 23; y++) {
-            put_px(px, fw * frames, fh, ox + 6 + leg, y, 90, 50, 20, 255);
-            put_px(px, fw * frames, fh, ox + 9 - leg, y, 90, 50, 20, 255);
-        }
-    }
-    {
-        unsigned t = canvas_texture_rgba(c, fw * frames, fh, px);
-        free(px);
-        return t;
-    }
-}
-
-static unsigned make_mob(Canvas *c)
-{
-    const int fw = 16, frames = 2;
-    unsigned char *px = calloc((size_t)fw * frames * 16, 4);
-    int f, x, y;
-    for (f = 0; f < frames; f++) {
-        int ox = f * fw, foot = f ? 1 : -1;
-        for (y = 4; y <= 13; y++) {
-            for (x = 2; x <= 13; x++) {
-                float dx = x - 7.5f, dy = y - 8.5f;
-                if (dx * dx + dy * dy < 36.0f)
-                    put_px(px, fw * frames, 16, ox + x, y, 150, 90, 40, 255);
-            }
-        }
-        put_px(px, fw * frames, 16, ox + 5, 8, 20, 20, 20, 255);
-        put_px(px, fw * frames, 16, ox + 10, 8, 20, 20, 20, 255);
-        for (x = 3; x <= 6; x++)
-            put_px(px, fw * frames, 16, ox + x + foot, 14, 40, 30, 20, 255);
-        for (x = 9; x <= 12; x++)
-            put_px(px, fw * frames, 16, ox + x - foot, 14, 40, 30, 20, 255);
-    }
-    {
-        unsigned t = canvas_texture_rgba(c, fw * frames, 16, px);
-        free(px);
-        return t;
-    }
-}
-
-static unsigned make_pipe(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            int lip = y < 4;
-            int r = lip ? 40 : 20, g = lip ? 190 : 150, b = lip ? 50 : 40;
-            if (x < 2 || x > 13) {
-                r -= 15;
-                g -= 30;
-            }
-            put_px(px, 16, 16, x, y, r, g, b, 255);
-        }
-    }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
-
-static unsigned make_flag(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    memset(px, 0, sizeof(px));
-    for (y = 0; y < 16; y++)
-        put_px(px, 16, 16, 3, y, 40, 180, 70, 255);
-    for (y = 1; y <= 7; y++)
-        for (x = 4; x <= 4 + (7 - y); x++)
-            put_px(px, 16, 16, x, y, 230, 40, 50, 255);
-    return canvas_texture_rgba(c, 16, 16, px);
 }
 
 static void add_pop(Plat *p, float x, float y)
@@ -333,15 +188,9 @@ static void load_level(Plat *p)
 static void *init(Canvas *c)
 {
     Plat *p = calloc(1, sizeof(*p));
-    p->tex_ground = make_noise_tile(c, 180, 90, 40, 3);
-    p->tex_brick = make_noise_tile(c, 190, 80, 50, 2);
-    p->tex_q = make_q_tile(c, 0);
-    p->tex_used = make_q_tile(c, 1);
-    p->tex_coin = make_coin(c);
-    p->tex_hero = make_hero(c);
-    p->tex_mob = make_mob(c);
-    p->tex_pipe = make_pipe(c);
-    p->tex_flag = make_flag(c);
+    load_or_solid(c, &p->tile_sheet, "assets/plat/tiles.png", 16, 16);
+    load_or_solid(c, &p->hero_sheet, "assets/plat/hero.png", 16, 24);
+    load_or_solid(c, &p->mob_sheet, "assets/plat/mob.png", 16, 16);
     p->cv = c;
     p->lives = 3;
     p->snd_jump = canvas_sound_tone(c, 420.0f, 90.0f, 0.4f);
@@ -670,19 +519,24 @@ cam:
     canvas_cam_set(c, camx, camy);
 }
 
-static unsigned tile_tex(const Plat *p, char t)
+/* assets/plat/tiles.png: ground brick ? used pipe flag coin */
+static int tile_cell(char t)
 {
     if (t == '#')
-        return p->tex_ground;
-    if (t == '?')
-        return p->tex_q;
-    if (t == 'D')
-        return p->tex_used;
+        return 0;
     if (t == 'B' || t == '=')
-        return p->tex_brick;
+        return 1;
+    if (t == '?')
+        return 2;
+    if (t == 'D')
+        return 3;
     if (t == 'T')
-        return p->tex_pipe;
-    return 0;
+        return 4;
+    if (t == 'F')
+        return 5;
+    if (t == 'o')
+        return 6;
+    return -1;
 }
 
 static void render(void *state, Canvas *c)
@@ -717,15 +571,15 @@ static void render(void *state, Canvas *c)
     for (ty = y0; ty <= y1; ty++) {
         for (tx = x0; tx <= x1; tx++) {
             char t = p->tiles[ty][tx];
-            unsigned tex = tile_tex(p, t);
+            int cell = tile_cell(t);
             float x = tx * TILE, y = ty * TILE;
-            if (tex)
-                canvas_blit(c, tex, x, y, TILE, TILE, 0, 0, 1, 1, 1, 1, 1, 1);
-            else if (t == 'o')
-                canvas_blit(c, p->tex_coin, x + 6, y + 6, 20, 20, 0, 0, 1, 1, 1, 1, 1, 1);
+            if (t == 'o')
+                canvas_draw_sheet(c, &p->tile_sheet, 6, x + 6, y + 6, 20, 20);
             else if (t == 'F') {
                 canvas_fill_rect(c, x + 12, y - TILE * 3, 4, TILE * 4, 0.2f, 0.75f, 0.3f, 1);
-                canvas_blit(c, p->tex_flag, x + 8, y - TILE * 3, 28, 28, 0, 0, 1, 1, 1, 1, 1, 1);
+                canvas_draw_sheet(c, &p->tile_sheet, 5, x + 8, y - TILE * 3, 28, 28);
+            } else if (cell >= 0) {
+                canvas_draw_sheet(c, &p->tile_sheet, cell, x, y, TILE, TILE);
             }
         }
     }
@@ -734,11 +588,12 @@ static void render(void *state, Canvas *c)
         Mob *m = &p->mobs[i];
         if (!m->alive)
             continue;
-        sprite_init(&spr, m->x, m->y, m->flat ? 28.0f : 24.0f, m->flat ? 10.0f : 24.0f, p->tex_mob);
+        sprite_from_sheet(&spr, &p->mob_sheet, 0, m->x, m->y);
+        sprite_anim(&spr, &p->mob_sheet, 0, 2, 0.0f);
+        spr.w = m->flat ? 28.0f : 24.0f;
+        spr.h = m->flat ? 10.0f : 24.0f;
         spr.origin_x = 0.5f;
         spr.origin_y = 1.0f;
-        spr.frames = 2;
-        spr.frame_w = 16;
         spr.frame = m->flat ? 0 : ((int)(canvas_time(c) * 8) & 1);
         canvas_draw_sprite(c, &spr);
     }
@@ -746,18 +601,18 @@ static void render(void *state, Canvas *c)
     for (i = 0; i < POP_MAX; i++) {
         if (!p->pops[i].on)
             continue;
-        canvas_blit(c, p->tex_coin, p->pops[i].x - 8, p->pops[i].y - 8, 16, 16, 0, 0, 1, 1, 1, 1, 1, 1);
+        canvas_draw_sheet(c, &p->tile_sheet, 6, p->pops[i].x - 8, p->pops[i].y - 8, 16, 16);
     }
 
     frame = p->hero.grounded ? ((int)(fabsf(p->hero.vx) * 0.08f + canvas_time(c) * 10) & 3) : 1;
     if (p->hero.grounded && fabsf(p->hero.vx) < 20.0f)
         frame = 0;
-    sprite_init(&spr, p->hero.x, p->hero.y, 26, 38, p->tex_hero);
+    sprite_from_sheet(&spr, &p->hero_sheet, 0, p->hero.x, p->hero.y);
+    sprite_anim(&spr, &p->hero_sheet, 0, 4, 0.0f);
+    spr.w = 26.0f;
+    spr.h = 38.0f;
     spr.origin_x = 0.5f;
     spr.origin_y = 1.0f;
-    spr.frames = 4;
-    spr.frame_w = 16;
-    spr.frame_h = 24;
     spr.frame = frame;
     spr.flip_x = p->hero.face < 0;
     spr.visible = !p->dead || ((int)(p->flash * 8) & 1);

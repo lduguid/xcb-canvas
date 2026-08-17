@@ -214,12 +214,26 @@ canvas_cam_zoom(c, 1.0f);
 
 ## Sprites and textures
 
-A `Sprite` is a rectangle plus velocity, tint, and optional animation.
+Put images next to the executable, usually under `assets/`. Supported files:
+
+| Format | Notes |
+|--------|--------|
+| **PNG** | Preferred. 8-bit, with or without alpha |
+| **JPEG** | Photos. No alpha |
+| **BMP** | Uncompressed 24- or 32-bit |
+
+Paths are relative to the game’s `.exe` / binary directory (the host `chdir`s there at startup). Use forward slashes: `assets/player.png`. A sample `assets/coin.png` is in the tree.
 
 ```c
+int tw, th;
+unsigned tex = canvas_texture_file(c, "assets/player.png");
+if (!tex)
+    tex = canvas_texture_solid(c, 1.0f, 0.2f, 0.2f);  /* missing file */
+
+canvas_image_info("assets/player.png", &tw, &th);  /* size without uploading */
+
 Sprite s;
-unsigned tex = canvas_texture_solid(c, 1.0f, 0.4f, 0.2f);
-sprite_init(&s, 100, 80, 32, 32, tex);
+sprite_init(&s, 100, 80, (float)tw, (float)th, tex);
 s.vx = 120.0f;
 s.origin_x = 0.5f;  /* rotate/flip around center */
 s.origin_y = 0.5f;
@@ -231,18 +245,71 @@ sprite_update(&s, dt);   /* x += vx * dt, advances frames */
 canvas_draw_sprite(c, &s);
 ```
 
-Make a texture from raw RGBA bytes (one pixel = 4 bytes, red first):
+Textures default to nearest-neighbor (chunky pixels). For smooth scaling:
+
+```c
+canvas_texture_nearest(tex, 0);
+```
+
+You can still build a texture in code (no file):
 
 ```c
 unsigned char px[16 * 16 * 4];
-/* fill px ... */
+/* fill px, one pixel = RGBA bytes 0–255 */
 unsigned tex = canvas_texture_rgba(c, 16, 16, px);
-canvas_texture_nearest(tex, 1);  /* chunky pixels */
 ```
 
-For a walk cycle, pack frames in a **horizontal strip**. Set `s.frames`, `s.frame_w`, `s.frame_h`, and `s.fps`. See `games/wander.c`.
-
 `canvas_blit` draws a sub-rectangle of a texture (UV 0–1) if you need more control than `Sprite`.
+
+Export tips: keep pixel art on integer sizes (16×16, 32×32). Do not premultiply alpha. Indexed-color PNG is fine; it is expanded to RGBA on load.
+
+## Sprite sheets
+
+Pack many pictures into one PNG as a **grid of equal cells**, left to right, then the next row. A 128×48 image of 16×16 cells is 8 columns × 3 rows (24 cells, indices 0–23).
+
+```
+ 0  1  2  3     walk cycle
+ 4  5  6  7     jump cycle
+ 8  9 10 11     coin  heart  key  potion
+```
+
+```c
+Sheet sheet;
+if (!canvas_sheet_load(c, &sheet, "assets/heroes.png", 16, 16))
+    return NULL;   /* file missing or smaller than one cell */
+
+/* Different stills from the same sheet */
+Sprite coin, heart;
+sprite_from_sheet(&coin, &sheet, 8, 200, 80);
+sprite_from_sheet(&heart, &sheet, 9, 240, 80);
+
+/* One sprite, several animations — switch by calling sprite_anim again */
+Sprite hero;
+sprite_from_sheet(&hero, &sheet, 0, 100, 160);
+sprite_anim(&hero, &sheet, 0, 4, 10.0f);   /* cells 0–3 walk */
+/* later, on jump: */
+sprite_anim(&hero, &sheet, 4, 4, 12.0f);   /* cells 4–7 jump */
+
+/* Tiles / HUD without a Sprite (w/h 0 = native cell size) */
+canvas_draw_sheet(c, &sheet, 10, 8, 8, 0, 0);
+
+/* in update */
+sprite_update(&hero, dt);
+sprite_update(&coin, dt);
+```
+
+`sprite_set_cell(&coin, 11)` swaps a still to another index without rebuilding the sprite.
+
+If you already have a texture (generated in code), describe its grid:
+
+```c
+canvas_sheet_init(&sheet, tex, 64, 20, 16, 20);  /* 4×1 strip */
+sprite_anim(&player, &sheet, 0, 4, 8.0f);
+```
+
+`games/wander.c` does that for the walk cycle. Leftover pixels on the right or bottom of the PNG are ignored. `canvas_sheet_count(&sheet)` is `cols * rows`.
+
+A sample grid is `assets/heroes.png` (16×16 cells).
 
 ## Sound
 
@@ -287,10 +354,10 @@ On Windows, `catch.exe` loads `catch.dll`. Keep `canvas.dll` next to the `.exe`.
 
 | File | Ideas to steal |
 |------|----------------|
-| `games/bounce.c` | Sprites, camera pan/zoom, generated texture, hit beep |
-| `games/wander.c` | Tile world, follow-cam, walk frames, mouse in world space |
-| `games/plat.c` | Gravity, jumps, tile collisions, enemies |
-| `games/pacman.c` | Grid movement, AI, frightened mode |
+| `games/bounce.c` | `canvas_sheet_load` + `sprite_from_sheet` (four balls from one PNG) |
+| `games/wander.c` | Tile sheet, hero walk `sprite_anim`, orb via `canvas_texture_file` |
+| `games/plat.c` | Tile sheet for blocks/coins/flag, hero and mob animation sheets |
+| `games/pacman.c` | Chomp frames on a sheet, four ghost cells from one sheet |
 
 Read those after the catch example. They are still just `canvas.h` plus your own structs.
 
@@ -306,6 +373,8 @@ From `include/canvas.h`:
 
 **Draw:** `canvas_clear`, `canvas_fill_rect`, `canvas_stroke_rect`, `canvas_draw_line`, `canvas_draw_text`, `canvas_begin_hud`, `canvas_end_hud`
 
-**Images:** `canvas_texture_rgba`, `canvas_texture_solid`, `canvas_texture_nearest`, `sprite_init`, `sprite_update`, `canvas_draw_sprite`, `canvas_blit`
+**Images:** `canvas_texture_file`, `canvas_image_info`, `canvas_texture_rgba`, `canvas_texture_solid`, `canvas_texture_nearest`, `sprite_init`, `sprite_update`, `canvas_draw_sprite`, `canvas_blit`
+
+**Sheets:** `canvas_sheet_load`, `canvas_sheet_init`, `canvas_sheet_count`, `canvas_draw_sheet`, `sprite_from_sheet`, `sprite_anim`, `sprite_set_cell`
 
 **Sound:** `canvas_sound_pcm`, `canvas_sound_tone`, `canvas_sound_noise`, `canvas_sound_play`, `canvas_sound_loop`, `canvas_sound_stop`

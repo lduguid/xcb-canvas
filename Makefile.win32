@@ -27,7 +27,7 @@ check-mingw:
 	  echo "Then re-run: make -f Makefile.win32"; \
 	  exit 1; }
 
-src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.h
+src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.h src/stb_image.h
 	$(MINGW_CC) $(CFLAGS) -DCANVAS_BUILD_DLL -c -o $@ src/canvas_core.c
 
 src/canvas_win32.win32.o: src/canvas_win32.c src/canvas_internal.h include/canvas.h

@@ -9,50 +9,32 @@
 
 typedef struct {
     Sprite balls[BALL_N];
-    unsigned tex, snd_hit;
+    Sheet balls_sheet;
+    unsigned snd_hit;
     int drag_x, drag_y;
     int dragging;
     float hit_cool;
 } Bounce;
-
-static unsigned make_ball(Canvas *c)
-{
-    unsigned char px[16 * 16 * 4];
-    int x, y;
-    for (y = 0; y < 16; y++) {
-        for (x = 0; x < 16; x++) {
-            float dx = x - 7.5f, dy = y - 7.5f;
-            int i = (y * 16 + x) * 4;
-            if (dx * dx + dy * dy < 49.0f) {
-                px[i] = 80;
-                px[i + 1] = 190;
-                px[i + 2] = 255;
-                px[i + 3] = 255;
-            } else {
-                px[i] = px[i + 1] = px[i + 2] = px[i + 3] = 0;
-            }
-        }
-    }
-    return canvas_texture_rgba(c, 16, 16, px);
-}
 
 static void *init(Canvas *c)
 {
     Bounce *b = calloc(1, sizeof(*b));
     int i;
 
-    b->tex = make_ball(c);
+    if (!canvas_sheet_load(c, &b->balls_sheet, "assets/bounce/balls.png", 16, 16)) {
+        unsigned t = canvas_texture_solid(c, 0.3f, 0.75f, 1.0f);
+        canvas_sheet_init(&b->balls_sheet, t, 16, 16, 16, 16);
+    }
     for (i = 0; i < BALL_N; i++) {
-        sprite_init(&b->balls[i], 80.0f + (float)(i * 90), 80.0f + (float)((i * 47) % 400), 28, 28, b->tex);
+        sprite_from_sheet(&b->balls[i], &b->balls_sheet, i % canvas_sheet_count(&b->balls_sheet),
+                          80.0f + (float)(i * 90), 80.0f + (float)((i * 47) % 400));
+        b->balls[i].w = b->balls[i].h = 28.0f;
         b->balls[i].vx = 80.0f + (float)((i * 37) % 160);
         b->balls[i].vy = 60.0f + (float)((i * 53) % 140);
         if (i & 1)
             b->balls[i].vx = -b->balls[i].vx;
         b->balls[i].origin_x = 0.5f;
         b->balls[i].origin_y = 0.5f;
-        b->balls[i].r = 0.6f + (i % 5) * 0.08f;
-        b->balls[i].g = 0.7f + (i % 3) * 0.1f;
-        b->balls[i].b = 1.0f;
     }
     b->snd_hit = canvas_sound_tone(c, 340.0f, 40.0f, 0.35f);
     canvas_cam_bounds(c, 0, 0, WORLD_W, WORLD_H);

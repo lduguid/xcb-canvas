@@ -23,6 +23,24 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wsign-compare"
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_BMP
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STBI_NO_THREAD_LOCALS
+#include "stb_image.h"
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 /* Public-domain 8x8 ASCII 32-126, bit7 = leftmost pixel. */
 static const unsigned char FONT8[95][8] = {
     {0,0,0,0,0,0,0,0},
@@ -443,6 +461,37 @@ unsigned canvas_texture_solid(Canvas *c, float r, float g, float b)
     return canvas_texture_rgba(c, 1, 1, px);
 }
 
+unsigned canvas_texture_file(Canvas *c, const char *path)
+{
+    int w = 0, h = 0, n = 0;
+    unsigned char *rgba;
+    unsigned tex;
+
+    if (!path || !path[0])
+        return 0;
+    rgba = stbi_load(path, &w, &h, &n, 4);
+    if (!rgba) {
+        fprintf(stderr, "canvas: cannot load '%s': %s\n", path,
+                stbi_failure_reason() ? stbi_failure_reason() : "unknown");
+        return 0;
+    }
+    tex = canvas_texture_rgba(c, w, h, rgba);
+    stbi_image_free(rgba);
+    return tex;
+}
+
+int canvas_image_info(const char *path, int *w, int *h)
+{
+    int tw = 0, th = 0, n = 0;
+    if (!path || !path[0] || !stbi_info(path, &tw, &th, &n))
+        return 0;
+    if (w)
+        *w = tw;
+    if (h)
+        *h = th;
+    return 1;
+}
+
 void canvas_texture_nearest(unsigned tex, int nearest)
 {
     int filter = nearest ? GL_NEAREST : GL_LINEAR;
@@ -497,6 +546,157 @@ void canvas_blit(Canvas *c, unsigned tex, float x, float y, float w, float h, fl
     glEnd();
 }
 
+int canvas_sheet_count(const Sheet *sheet)
+{
+    if (!sheet || sheet->cols <= 0 || sheet->rows <= 0)
+        return 0;
+    return sheet->cols * sheet->rows;
+}
+
+static int sheet_clamp(const Sheet *sheet, int index)
+{
+    int n = canvas_sheet_count(sheet);
+    if (n <= 0)
+        return 0;
+    if (index < 0)
+        return 0;
+    if (index >= n)
+        return n - 1;
+    return index;
+}
+
+static void sheet_uv(const Sheet *sheet, int index, float *u0, float *v0, float *u1, float *v1)
+{
+    int col, row;
+    float tw, th;
+
+    index = sheet_clamp(sheet, index);
+    col = sheet->cols > 0 ? index % sheet->cols : 0;
+    row = sheet->cols > 0 ? index / sheet->cols : 0;
+    tw = sheet->tex_w > 0 ? (float)sheet->tex_w : 1.0f;
+    th = sheet->tex_h > 0 ? (float)sheet->tex_h : 1.0f;
+    *u0 = (float)(col * sheet->cell_w) / tw;
+    *v0 = (float)(row * sheet->cell_h) / th;
+    *u1 = (float)((col + 1) * sheet->cell_w) / tw;
+    *v1 = (float)((row + 1) * sheet->cell_h) / th;
+}
+
+void canvas_sheet_init(Sheet *sheet, unsigned tex, int tex_w, int tex_h, int cell_w, int cell_h)
+{
+    if (!sheet)
+        return;
+    memset(sheet, 0, sizeof(*sheet));
+    if (cell_w <= 0 || cell_h <= 0 || tex_w <= 0 || tex_h <= 0)
+        return;
+    sheet->texture = tex;
+    sheet->tex_w = tex_w;
+    sheet->tex_h = tex_h;
+    sheet->cell_w = cell_w;
+    sheet->cell_h = cell_h;
+    sheet->cols = tex_w / cell_w;
+    sheet->rows = tex_h / cell_h;
+}
+
+int canvas_sheet_load(Canvas *c, Sheet *sheet, const char *path, int cell_w, int cell_h)
+{
+    int w = 0, h = 0, n = 0;
+    unsigned char *rgba;
+    unsigned tex;
+
+    if (sheet)
+        memset(sheet, 0, sizeof(*sheet));
+    if (!c || !sheet || !path || !path[0] || cell_w <= 0 || cell_h <= 0)
+        return 0;
+    rgba = stbi_load(path, &w, &h, &n, 4);
+    if (!rgba) {
+        fprintf(stderr, "canvas: cannot load sheet '%s': %s\n", path,
+                stbi_failure_reason() ? stbi_failure_reason() : "unknown");
+        return 0;
+    }
+    if (w < cell_w || h < cell_h) {
+        fprintf(stderr, "canvas: sheet '%s' is %dx%d, smaller than a %dx%d cell\n",
+                path, w, h, cell_w, cell_h);
+        stbi_image_free(rgba);
+        return 0;
+    }
+    tex = canvas_texture_rgba(c, w, h, rgba);
+    stbi_image_free(rgba);
+    canvas_sheet_init(sheet, tex, w, h, cell_w, cell_h);
+    return sheet->cols > 0 && sheet->rows > 0;
+}
+
+void canvas_draw_sheet(Canvas *c, const Sheet *sheet, int index, float x, float y, float w, float h)
+{
+    float u0, v0, u1, v1;
+    if (!sheet || !sheet->texture)
+        return;
+    if (w <= 0.0f)
+        w = (float)sheet->cell_w;
+    if (h <= 0.0f)
+        h = (float)sheet->cell_h;
+    sheet_uv(sheet, index, &u0, &v0, &u1, &v1);
+    canvas_blit(c, sheet->texture, x, y, w, h, u0, v0, u1, v1, 1, 1, 1, 1);
+}
+
+void sprite_from_sheet(Sprite *s, const Sheet *sheet, int index, float x, float y)
+{
+    if (!s || !sheet)
+        return;
+    index = sheet_clamp(sheet, index);
+    sprite_init(s, x, y, (float)sheet->cell_w, (float)sheet->cell_h, sheet->texture);
+    s->frame_w = sheet->cell_w;
+    s->frame_h = sheet->cell_h;
+    s->sheet_cols = sheet->cols;
+    s->sheet_first = index;
+    s->tex_w = sheet->tex_w;
+    s->tex_h = sheet->tex_h;
+    s->frames = 1;
+    s->frame = 0;
+    s->fps = 0.0f;
+}
+
+void sprite_anim(Sprite *s, const Sheet *sheet, int first, int count, float fps)
+{
+    int n, maxc;
+    if (!s || !sheet)
+        return;
+    n = canvas_sheet_count(sheet);
+    first = sheet_clamp(sheet, first);
+    maxc = n - first;
+    if (count < 1)
+        count = 1;
+    if (count > maxc)
+        count = maxc > 0 ? maxc : 1;
+    if (!s->texture)
+        sprite_init(s, s->x, s->y, (float)sheet->cell_w, (float)sheet->cell_h, sheet->texture);
+    s->texture = sheet->texture;
+    if (s->w <= 0.0f)
+        s->w = (float)sheet->cell_w;
+    if (s->h <= 0.0f)
+        s->h = (float)sheet->cell_h;
+    s->frame_w = sheet->cell_w;
+    s->frame_h = sheet->cell_h;
+    s->sheet_cols = sheet->cols;
+    s->sheet_first = first;
+    s->tex_w = sheet->tex_w;
+    s->tex_h = sheet->tex_h;
+    s->frames = count;
+    s->frame = 0;
+    s->anim_t = 0.0f;
+    s->fps = fps;
+}
+
+void sprite_set_cell(Sprite *s, int index)
+{
+    if (!s)
+        return;
+    s->sheet_first = index < 0 ? 0 : index;
+    s->frames = 1;
+    s->frame = 0;
+    s->fps = 0.0f;
+    s->anim_t = 0.0f;
+}
+
 void canvas_draw_sprite(Canvas *c, const Sprite *s)
 {
     float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
@@ -504,7 +704,16 @@ void canvas_draw_sprite(Canvas *c, const Sprite *s)
 
     if (!s || !s->visible)
         return;
-    if (s->frames > 1 && s->frame_w > 0) {
+    if (s->sheet_cols > 0 && s->frame_w > 0 && s->tex_w > 0) {
+        int cell = s->sheet_first + s->frame;
+        int col = cell % s->sheet_cols;
+        int row = cell / s->sheet_cols;
+        float tw = (float)s->tex_w, th = s->tex_h > 0 ? (float)s->tex_h : 1.0f;
+        u0 = (float)(col * s->frame_w) / tw;
+        v0 = (float)(row * s->frame_h) / th;
+        u1 = (float)((col + 1) * s->frame_w) / tw;
+        v1 = (float)((row + 1) * s->frame_h) / th;
+    } else if (s->frames > 1 && s->frame_w > 0) {
         u0 = (float)(s->frame * s->frame_w) / (float)(s->frame_w * s->frames);
         u1 = (float)((s->frame + 1) * s->frame_w) / (float)(s->frame_w * s->frames);
     }

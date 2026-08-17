@@ -106,7 +106,19 @@ typedef struct Sprite {
     int visible;
     int flip_x;
     int flip_y;
+    /* Grid sheet (0 = legacy horizontal strip). */
+    int sheet_cols;
+    int sheet_first;
+    int tex_w, tex_h;
 } Sprite;
+
+/* Equal-sized cells packed left-to-right, top-to-bottom. */
+typedef struct Sheet {
+    unsigned texture;
+    int tex_w, tex_h;
+    int cell_w, cell_h;
+    int cols, rows;
+} Sheet;
 
 CANVAS_API int canvas_run(const Game *game);
 
@@ -147,6 +159,10 @@ CANVAS_API void canvas_end_hud(Canvas *c);
 
 CANVAS_API unsigned canvas_texture_rgba(Canvas *c, int w, int h, const unsigned char *rgba);
 CANVAS_API unsigned canvas_texture_solid(Canvas *c, float r, float g, float b);
+/* PNG, JPEG, or BMP. Path is relative to the exe directory. Returns 0 on failure. */
+CANVAS_API unsigned canvas_texture_file(Canvas *c, const char *path);
+/* Probe width/height without uploading. Returns 1 on success. */
+CANVAS_API int canvas_image_info(const char *path, int *w, int *h);
 CANVAS_API void canvas_texture_nearest(unsigned tex, int nearest);
 
 CANVAS_API void sprite_init(Sprite *s, float x, float y, float w, float h, unsigned tex);
@@ -154,6 +170,16 @@ CANVAS_API void sprite_update(Sprite *s, float dt);
 CANVAS_API void canvas_draw_sprite(Canvas *c, const Sprite *s);
 CANVAS_API void canvas_blit(Canvas *c, unsigned tex, float x, float y, float w, float h, float u0, float v0,
                  float u1, float v1, float r, float g, float b, float a);
+
+/* cell_w / cell_h are pixel size of one tile. Leftover pixels on the right/bottom are ignored. */
+CANVAS_API int canvas_sheet_load(Canvas *c, Sheet *sheet, const char *path, int cell_w, int cell_h);
+CANVAS_API void canvas_sheet_init(Sheet *sheet, unsigned tex, int tex_w, int tex_h, int cell_w, int cell_h);
+CANVAS_API int canvas_sheet_count(const Sheet *sheet);
+CANVAS_API void canvas_draw_sheet(Canvas *c, const Sheet *sheet, int index, float x, float y, float w, float h);
+CANVAS_API void sprite_from_sheet(Sprite *s, const Sheet *sheet, int index, float x, float y);
+/* Cells [first, first+count) play in a loop. count 1 is a still. */
+CANVAS_API void sprite_anim(Sprite *s, const Sheet *sheet, int first, int count, float fps);
+CANVAS_API void sprite_set_cell(Sprite *s, int index);
 
 /* PCM is copied and resampled to the mixer rate. id 0 is invalid / silent. */
 CANVAS_API unsigned canvas_sound_pcm(Canvas *c, const short *samples, int count, int rate);
