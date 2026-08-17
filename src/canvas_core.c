@@ -788,10 +788,17 @@ void canvas_sound_stop(Canvas *c, unsigned id)
 static CanvasHotReloadFn g_hot_fn;
 static void *g_hot_ud;
 
+static char g_hot_tool[64];
+
 void canvas_hot_setup(CanvasHotReloadFn fn, void *userdata)
 {
     g_hot_fn = fn;
     g_hot_ud = userdata;
+}
+
+void canvas_hot_set_tool(const char *name)
+{
+    snprintf(g_hot_tool, sizeof(g_hot_tool), "%s", name ? name : "");
 }
 
 void canvas_hot_status(Canvas *c, const char *msg, float seconds)
@@ -876,7 +883,7 @@ void canvas_hot_overlay(Canvas *c)
     alert = (strstr(status, "FAIL") != NULL) || (strstr(status, "rebuild") != NULL) ||
             (strstr(status, "reload") != NULL);
     line2 = "F5 reload   F6 reset";
-    line3 = "F1 hide overlay";
+    line3 = g_hot_tool[0] ? g_hot_tool : "F1 hide overlay";
     px = (float)c->width - pw - 10.0f;
     py = 8.0f;
     if (px < 8.0f)

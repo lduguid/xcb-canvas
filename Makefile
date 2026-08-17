@@ -42,5 +42,5 @@ plat: $(HOST_SRC) $(CANVAS_OBJ) plat.so include/canvas.h
 clean:
 	rm -f wander bounce pacman plat canvas src/canvas_core.o src/canvas_x11.o
 	rm -f wander.exe bounce.exe pacman.exe plat.exe canvas.exe src/*.win32.o
-	rm -f *.so *.dll libcanvas_host.a
+	rm -f *.so *.dll libcanvas.a libcanvas_host.a
 	rm -rf .hot
