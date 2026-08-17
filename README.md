@@ -23,6 +23,8 @@ plat.exe
 
 `./canvas bounce` and `canvas.exe bounce` also work. Each named binary (`./plat`, `plat.exe`) is a host that loads `plat.so` / `plat.dll`.
 
+The Win32 build has no extra runtime to install: copy the `.exe`, `canvas.dll`, and the game `.dll` (plus `assets/`) and it runs on a stock Windows box (GDI, OpenGL, and waveOut are already there). The Linux build needs X11/XCB at runtime, plus OpenGL/GLX and ALSA (`libx11`, `libxcb`, `libgl`, `libasound`).
+
 | Key | Action |
 |-----|--------|
 | F5 | Rebuild the game plugin and keep heap state |
@@ -229,6 +231,8 @@ Put images next to the executable, usually under `assets/`. Supported files:
 | **JPEG** | Photos. No alpha |
 | **BMP** | Uncompressed 24- or 32-bit |
 
+The host decodes those files with [stb_image](https://github.com/nothings/stb) (Sean Barrett, public domain), vendored as `src/stb_image.h`. Games still only call `canvas_texture_file` / `canvas_image_info`; they do not include stb themselves.
+
 Paths are relative to the game’s `.exe` / binary directory (the host `chdir`s there at startup). Use forward slashes: `assets/player.png`. A sample `assets/coin.png` is in the tree.
 
 ```c
@@ -385,3 +389,7 @@ From `include/canvas.h`:
 **Sheets:** `canvas_sheet_load`, `canvas_sheet_init`, `canvas_sheet_count`, `canvas_draw_sheet`, `sprite_from_sheet`, `sprite_anim`, `sprite_set_cell`
 
 **Sound:** `canvas_sound_pcm`, `canvas_sound_tone`, `canvas_sound_noise`, `canvas_sound_play`, `canvas_sound_loop`, `canvas_sound_stop`
+
+## Credits
+
+PNG, JPEG, and BMP loading uses **stb_image** v2.30 by Sean Barrett (`src/stb_image.h`). Public domain: [http://nothings.org/stb](http://nothings.org/stb) / [github.com/nothings/stb](https://github.com/nothings/stb). Thank you.
