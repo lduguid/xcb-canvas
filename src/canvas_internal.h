@@ -49,7 +49,7 @@ struct Canvas {
 typedef int (*CanvasHotReloadFn)(void *userdata, Game *game);
 
 CANVAS_API void canvas_hot_setup(CanvasHotReloadFn fn, void *userdata);
-void canvas_hot_set_tool(const char *name);
+CANVAS_API void canvas_hot_set_tool(const char *name);
 void canvas_hot_status(Canvas *c, const char *msg, float seconds);
 int canvas_hot_active(void);
 void canvas_hot_tick(Canvas *c, Game *game, void **state);

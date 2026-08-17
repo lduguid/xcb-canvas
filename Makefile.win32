@@ -1,7 +1,83 @@
-# Windows binaries. From Linux/WSL this cross-compiles; on Windows use native gcc.
-#   make -f Makefile.win32
+# Windows binaries.
+#   make -f Makefile.win32                 MinGW-w64 (default)
+#   make -f Makefile.win32 TOOLSET=msvc    Visual Studio cl (vcvars64)
+#
+# From WSL, MinGW uses the cross compiler. MSVC still runs Windows cl via cmd.
+# Override the VS env script with VCVARS=C:\path\to\vcvars64.bat if needed.
 #
 # GNU make always defines CC=cc, so do not use CC ?= mingw-gcc here.
+
+TOOLSET ?= mingw
+
+GAMES = wander bounce pacman plat
+PLUGINS = $(addsuffix .dll,$(GAMES))
+HOSTS = $(addsuffix .exe,$(GAMES)) canvas.exe
+HOST_SRC = src/canvas_host.c
+TOOLSET_STAMP = .hot/toolset-$(TOOLSET)
+
+# Must be set before any rule: the stamp recipe used to be first, so
+# `make -f Makefile.win32` only touched .hot/toolset-* and built nothing.
+.DEFAULT_GOAL := all
+.PHONY: all clean check-mingw check-msvc
+
+$(TOOLSET_STAMP):
+	@mkdir -p .hot
+	@rm -f .hot/toolset-*
+	@echo $(TOOLSET) > $@
+
+ifeq ($(TOOLSET),msvc)
+
+ifeq ($(OS),Windows_NT)
+CL = src\msvc-cl.cmd
+else
+CL = sh src/msvc-cl.sh
+endif
+
+CLFLAGS = /nologo /O2 /W3 /Iinclude /Isrc /D_CRT_SECURE_NO_WARNINGS
+WINLIBS = opengl32.lib gdi32.lib user32.lib winmm.lib
+
+all: check-msvc canvas.dll $(HOSTS) $(PLUGINS)
+	@echo "win32 TOOLSET=msvc  (cl)"
+
+check-msvc:
+	@$(CL) /nologo /? >nul || { \
+	  echo "Need Visual Studio C++ x64 toolset (cl + vcvars64)."; \
+	  echo "  make -f Makefile.win32 TOOLSET=msvc"; \
+	  echo "  Or set VCVARS to vcvars64.bat"; \
+	  exit 1; }
+
+canvas.dll canvas.lib: $(TOOLSET_STAMP) src/canvas_core.c src/canvas_win32.c src/canvas_internal.h include/canvas.h src/stb_image.h canvas.def
+	$(CL) $(CLFLAGS) /DCANVAS_BUILD_DLL /LD src/canvas_core.c src/canvas_win32.c \
+		/Fe:canvas.dll /link /DEF:canvas.def $(WINLIBS)
+
+canvas.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) $(HOST_SRC) /Fe:canvas.exe /link canvas.lib
+
+wander.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"wander\" $(HOST_SRC) /Fe:wander.exe /link canvas.lib
+
+bounce.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"bounce\" $(HOST_SRC) /Fe:bounce.exe /link canvas.lib
+
+pacman.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"pacman\" $(HOST_SRC) /Fe:pacman.exe /link canvas.lib
+
+plat.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"plat\" $(HOST_SRC) /Fe:plat.exe /link canvas.lib
+
+wander.dll: games/wander.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/wander.c /Fe:wander.dll /link canvas.lib
+
+bounce.dll: games/bounce.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/bounce.c /Fe:bounce.dll /link canvas.lib
+
+pacman.dll: games/pacman.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/pacman.c /Fe:pacman.dll /link canvas.lib
+
+plat.dll: games/plat.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/plat.c /Fe:plat.dll /link canvas.lib
+
+else
 
 ifeq ($(OS),Windows_NT)
 MINGW_CC ?= gcc
@@ -14,17 +90,15 @@ LIBS = -lopengl32 -lgdi32 -luser32 -lwinmm
 CORE = src/canvas_core.win32.o
 PLAT = src/canvas_win32.win32.o
 
-GAMES = wander bounce pacman plat
-PLUGINS = $(addsuffix .dll,$(GAMES))
-HOSTS = $(addsuffix .exe,$(GAMES)) canvas.exe
-
 all: check-mingw canvas.dll $(HOSTS) $(PLUGINS)
+	@echo "win32 TOOLSET=mingw  ($(MINGW_CC))"
 
 check-mingw:
 	@command -v $(MINGW_CC) >/dev/null || { \
 	  echo "Need MinGW-w64. On Debian/Ubuntu/WSL:"; \
 	  echo "  sudo apt install gcc-mingw-w64-x86-64"; \
 	  echo "Then re-run: make -f Makefile.win32"; \
+	  echo "Or: make -f Makefile.win32 TOOLSET=msvc"; \
 	  exit 1; }
 
 src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.h src/stb_image.h
@@ -35,11 +109,9 @@ src/canvas_win32.win32.o: src/canvas_win32.c src/canvas_internal.h include/canva
 
 # Engine lives in canvas.dll so plat.exe and plat.dll share one copy of
 # canvas_* (a game DLL cannot import those symbols from an .exe).
-canvas.dll: $(CORE) $(PLAT)
+canvas.dll: $(TOOLSET_STAMP) $(CORE) $(PLAT)
 	$(MINGW_CC) -shared -o $@ $(CORE) $(PLAT) $(LIBS) \
 		-Wl,--export-all-symbols,--out-implib,libcanvas.a
-
-HOST_SRC = src/canvas_host.c
 
 canvas.exe: $(HOST_SRC) canvas.dll
 	$(MINGW_CC) $(CFLAGS) -o $@ $(HOST_SRC) -L. -lcanvas
@@ -68,7 +140,10 @@ pacman.dll: games/pacman.c canvas.dll
 plat.dll: games/plat.c canvas.dll
 	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/plat.c -L. -lcanvas
 
+endif
+
 clean:
 	rm -f wander.exe bounce.exe pacman.exe plat.exe canvas.exe src/*.win32.o
-	rm -f *.dll libcanvas.a libcanvas_host.a
+	rm -f *.dll libcanvas.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
+	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj
 	rm -rf .hot

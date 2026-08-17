@@ -17,6 +17,7 @@ Windows (from WSL, or native MinGW):
 
 ```bash
 make -f Makefile.win32
+make -f Makefile.win32 TOOLSET=msvc    # Visual Studio cl instead of MinGW
 plat.exe
 ```
 

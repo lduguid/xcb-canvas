@@ -54,3 +54,4 @@ canvas_sound_play
 canvas_sound_loop
 canvas_sound_stop
 canvas_hot_setup
+canvas_hot_set_tool
