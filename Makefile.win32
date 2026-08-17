@@ -40,7 +40,7 @@ all: check-msvc canvas.dll $(HOSTS) $(PLUGINS)
 	@echo "win32 TOOLSET=msvc  (cl)"
 
 check-msvc:
-	@$(CL) /nologo /? >nul || { \
+	@$(CL) /nologo /? >/dev/null || { \
 	  echo "Need Visual Studio C++ x64 toolset (cl + vcvars64)."; \
 	  echo "  make -f Makefile.win32 TOOLSET=msvc"; \
 	  echo "  Or set VCVARS to vcvars64.bat"; \
@@ -170,4 +170,5 @@ clean:
 	rm -f wander.exe bounce.exe pacman.exe plat.exe vector.exe crate.exe canvas.exe src/*.win32.o
 	rm -f *.dll libcanvas.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
 	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj
+	rm -f nul
 	rm -rf .hot

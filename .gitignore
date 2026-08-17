@@ -35,3 +35,6 @@ src/*.win32.o
 *.VC.db
 *.VC.opendb
 
+# WSL/GNU make treats Windows `>nul` as a file named nul
+nul
+

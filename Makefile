@@ -49,4 +49,5 @@ clean:
 	rm -f wander bounce pacman plat vector crate canvas src/canvas_core.o src/canvas_x11.o
 	rm -f wander.exe bounce.exe pacman.exe plat.exe vector.exe crate.exe canvas.exe src/*.win32.o
 	rm -f *.so *.dll libcanvas.a libcanvas_host.a canvas.lib canvas.exp *.obj *.pdb *.ilk
+	rm -f nul
 	rm -rf .hot
