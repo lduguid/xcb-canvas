@@ -8,7 +8,10 @@ CORE = src/canvas_core.o
 PLAT = src/canvas_x11.o
 CANVAS_OBJ = $(CORE) $(PLAT)
 
-all: wander bounce pacman plat
+GAMES = wander bounce pacman plat
+PLUGINS = $(addsuffix .so,$(GAMES))
+
+all: $(GAMES) canvas $(PLUGINS)
 
 src/canvas_core.o: src/canvas_core.c src/canvas_internal.h include/canvas.h
 	$(CC) $(CFLAGS) -c -o $@ src/canvas_core.c
@@ -16,18 +19,28 @@ src/canvas_core.o: src/canvas_core.c src/canvas_internal.h include/canvas.h
 src/canvas_x11.o: src/canvas_x11.c src/canvas_internal.h include/canvas.h
 	$(CC) $(CFLAGS) -c -o $@ src/canvas_x11.c
 
-wander: games/wander.c $(CANVAS_OBJ) include/canvas.h
-	$(CC) $(CFLAGS) -o $@ games/wander.c $(CANVAS_OBJ) $(LIBS)
+HOST_SRC = src/canvas_host.c
 
-bounce: games/bounce.c $(CANVAS_OBJ) include/canvas.h
-	$(CC) $(CFLAGS) -o $@ games/bounce.c $(CANVAS_OBJ) $(LIBS)
+canvas: $(HOST_SRC) $(CANVAS_OBJ) include/canvas.h
+	$(CC) $(CFLAGS) -rdynamic -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
 
-pacman: games/pacman.c $(CANVAS_OBJ) include/canvas.h
-	$(CC) $(CFLAGS) -o $@ games/pacman.c $(CANVAS_OBJ) $(LIBS)
+wander: $(HOST_SRC) $(CANVAS_OBJ) wander.so include/canvas.h
+	$(CC) $(CFLAGS) -rdynamic -DCANVAS_LAUNCH=\"wander\" -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
 
-plat: games/plat.c $(CANVAS_OBJ) include/canvas.h
-	$(CC) $(CFLAGS) -o $@ games/plat.c $(CANVAS_OBJ) $(LIBS)
+bounce: $(HOST_SRC) $(CANVAS_OBJ) bounce.so include/canvas.h
+	$(CC) $(CFLAGS) -rdynamic -DCANVAS_LAUNCH=\"bounce\" -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
+
+pacman: $(HOST_SRC) $(CANVAS_OBJ) pacman.so include/canvas.h
+	$(CC) $(CFLAGS) -rdynamic -DCANVAS_LAUNCH=\"pacman\" -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
+
+plat: $(HOST_SRC) $(CANVAS_OBJ) plat.so include/canvas.h
+	$(CC) $(CFLAGS) -rdynamic -DCANVAS_LAUNCH=\"plat\" -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
+
+%.so: games/%.c include/canvas.h
+	$(CC) $(CFLAGS) -shared -fPIC -DCANVAS_PLUGIN -o $@ $< -lm
 
 clean:
-	rm -f wander bounce pacman plat src/canvas_core.o src/canvas_x11.o
-	rm -f wander.exe bounce.exe pacman.exe plat.exe src/*.win32.o
+	rm -f wander bounce pacman plat canvas src/canvas_core.o src/canvas_x11.o
+	rm -f wander.exe bounce.exe pacman.exe plat.exe canvas.exe src/*.win32.o
+	rm -f *.so *.dll libcanvas_host.a
+	rm -rf .hot

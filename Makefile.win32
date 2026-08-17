@@ -10,7 +10,10 @@ LIBS = -lopengl32 -lgdi32 -luser32 -lwinmm
 CORE = src/canvas_core.win32.o
 PLAT = src/canvas_win32.win32.o
 
-all: check-mingw wander.exe bounce.exe pacman.exe plat.exe
+GAMES = wander bounce pacman plat
+PLUGINS = $(addsuffix .dll,$(GAMES))
+
+all: check-mingw $(addsuffix .exe,$(GAMES)) canvas.exe $(PLUGINS)
 
 check-mingw:
 	@command -v $(MINGW_CC) >/dev/null || { \
@@ -25,17 +28,37 @@ src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.
 src/canvas_win32.win32.o: src/canvas_win32.c src/canvas_internal.h include/canvas.h
 	$(MINGW_CC) $(CFLAGS) -c -o $@ src/canvas_win32.c
 
-wander.exe: games/wander.c $(CORE) $(PLAT)
-	$(MINGW_CC) $(CFLAGS) -o $@ games/wander.c $(CORE) $(PLAT) $(LIBS)
+HOST_SRC = src/canvas_host.c
+HOST_FLAGS = -Wl,--export-all-symbols,--out-implib,libcanvas_host.a
 
-bounce.exe: games/bounce.c $(CORE) $(PLAT)
-	$(MINGW_CC) $(CFLAGS) -o $@ games/bounce.c $(CORE) $(PLAT) $(LIBS)
+canvas.exe: $(HOST_SRC) $(CORE) $(PLAT)
+	$(MINGW_CC) $(CFLAGS) -o $@ $(HOST_SRC) $(CORE) $(PLAT) $(LIBS) $(HOST_FLAGS)
 
-pacman.exe: games/pacman.c $(CORE) $(PLAT)
-	$(MINGW_CC) $(CFLAGS) -o $@ games/pacman.c $(CORE) $(PLAT) $(LIBS)
+wander.exe: $(HOST_SRC) $(CORE) $(PLAT) wander.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"wander\" -o $@ $(HOST_SRC) $(CORE) $(PLAT) $(LIBS) $(HOST_FLAGS)
 
-plat.exe: games/plat.c $(CORE) $(PLAT)
-	$(MINGW_CC) $(CFLAGS) -o $@ games/plat.c $(CORE) $(PLAT) $(LIBS)
+bounce.exe: $(HOST_SRC) $(CORE) $(PLAT) bounce.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"bounce\" -o $@ $(HOST_SRC) $(CORE) $(PLAT) $(LIBS) $(HOST_FLAGS)
+
+pacman.exe: $(HOST_SRC) $(CORE) $(PLAT) pacman.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"pacman\" -o $@ $(HOST_SRC) $(CORE) $(PLAT) $(LIBS) $(HOST_FLAGS)
+
+plat.exe: $(HOST_SRC) $(CORE) $(PLAT) plat.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"plat\" -o $@ $(HOST_SRC) $(CORE) $(PLAT) $(LIBS) $(HOST_FLAGS)
+
+wander.dll: games/wander.c canvas.exe
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/wander.c -L. -lcanvas_host -lm
+
+bounce.dll: games/bounce.c canvas.exe
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/bounce.c -L. -lcanvas_host -lm
+
+pacman.dll: games/pacman.c canvas.exe
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/pacman.c -L. -lcanvas_host -lm
+
+plat.dll: games/plat.c canvas.exe
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/plat.c -L. -lcanvas_host -lm
 
 clean:
-	rm -f wander.exe bounce.exe pacman.exe plat.exe src/*.win32.o
+	rm -f wander.exe bounce.exe pacman.exe plat.exe canvas.exe src/*.win32.o
+	rm -f *.dll libcanvas_host.a
+	rm -rf .hot

@@ -1,6 +1,7 @@
 #include "canvas_internal.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -128,6 +129,7 @@ void canvas_core_reset(Canvas *c, int width, int height)
     c->height = height > 0 ? height : 600;
     c->running = 1;
     c->zoom = 1.0f;
+    c->hot_hud = 1;
 }
 
 void canvas_core_gl_setup(Canvas *c)
@@ -781,4 +783,111 @@ void canvas_sound_stop(Canvas *c, unsigned id)
             c->snd_v_clip[v] = 0;
     }
     SND_UNLOCK(c);
+}
+
+static CanvasHotReloadFn g_hot_fn;
+static void *g_hot_ud;
+
+void canvas_hot_setup(CanvasHotReloadFn fn, void *userdata)
+{
+    g_hot_fn = fn;
+    g_hot_ud = userdata;
+}
+
+void canvas_hot_status(Canvas *c, const char *msg, float seconds)
+{
+    if (!msg)
+        msg = "";
+    snprintf(c->hot_msg, sizeof(c->hot_msg), "%s", msg);
+    c->hot_msg_t = seconds;
+    if (msg[0])
+        fprintf(stderr, "canvas: %s\n", msg);
+}
+
+int canvas_hot_active(void)
+{
+    return g_hot_fn != NULL;
+}
+
+void canvas_hot_tick(Canvas *c, Game *game, void **state)
+{
+    int reset, reload;
+
+    if (canvas_key_pressed(c, KEY_F1)) {
+        c->hot_hud = !c->hot_hud;
+        if (c->hot_hud && !c->hot_msg[0])
+            snprintf(c->hot_msg, sizeof(c->hot_msg), "ready");
+    }
+    if (c->hot_msg_t > 0.0f) {
+        c->hot_msg_t -= 1.0f / 60.0f;
+        if (c->hot_msg_t <= 0.0f && g_hot_fn)
+            snprintf(c->hot_msg, sizeof(c->hot_msg), "ready");
+        else if (c->hot_msg_t <= 0.0f)
+            c->hot_msg[0] = 0;
+    }
+    reload = canvas_key_pressed(c, KEY_F5);
+    reset = canvas_key_pressed(c, KEY_F6);
+    if (!reload && !reset)
+        return;
+    if (!g_hot_fn) {
+        c->hot_hud = 1;
+        canvas_hot_status(c, "static build — use ./plat after rebuild", 6.0f);
+        return;
+    }
+    c->hot_hud = 1;
+    canvas_hot_status(c, reset ? "rebuilding (reset)..." : "rebuilding...", 8.0f);
+    {
+        Game next = *game;
+        if (g_hot_fn(g_hot_ud, &next) != 0) {
+            canvas_hot_status(c, "FAILED — see terminal", 8.0f);
+            return;
+        }
+        *game = next;
+        if (reset) {
+            if (*state && game->shutdown)
+                game->shutdown(*state, c);
+            *state = game->init ? game->init(c) : NULL;
+            canvas_hot_status(c, "reloaded + reset", 6.0f);
+        } else {
+            if (game->hot_reload && *state)
+                game->hot_reload(*state, c);
+            canvas_hot_status(c, "reloaded, state kept", 6.0f);
+        }
+    }
+}
+
+static void hot_draw_line(Canvas *c, float x, float y, const char *s, float r, float g, float b)
+{
+    canvas_draw_text(c, x, y, s, r, g, b);
+}
+
+void canvas_hot_overlay(Canvas *c)
+{
+    const char *status, *line2, *line3;
+    float pw = 236.0f, ph = 52.0f, px, py;
+    int alert;
+
+    if (!c->hot_hud)
+        return;
+    if (!g_hot_fn && !c->hot_msg[0])
+        return;
+
+    status = c->hot_msg[0] ? c->hot_msg : "ready";
+    alert = (strstr(status, "FAIL") != NULL) || (strstr(status, "rebuild") != NULL) ||
+            (strstr(status, "reload") != NULL);
+    line2 = "F5 reload   F6 reset";
+    line3 = "F1 hide overlay";
+    px = (float)c->width - pw - 10.0f;
+    py = 8.0f;
+    if (px < 8.0f)
+        px = 8.0f;
+
+    canvas_begin_hud(c);
+    canvas_fill_rect(c, px, py, pw, ph, 0.04f, 0.05f, 0.07f, 0.42f);
+    canvas_stroke_rect(c, px, py, pw, ph, 1.0f, 0.85f, 0.25f, 0.35f);
+    hot_draw_line(c, px + 8, py + 16, status, alert ? 1.0f : 0.85f, alert ? 0.88f : 0.9f,
+                  alert ? 0.3f : 0.55f);
+    hot_draw_line(c, px + 8, py + 30, line2, 0.75f, 0.78f, 0.7f);
+    hot_draw_line(c, px + 8, py + 44, line3, 0.55f, 0.58f, 0.52f);
+    canvas_end_hud(c);
 }

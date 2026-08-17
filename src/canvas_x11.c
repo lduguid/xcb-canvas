@@ -141,6 +141,12 @@ static CanvasKey keysym_to_key(KeySym ks)
         return (CanvasKey)(KEY_A + (int)(ks - XK_A));
     if (ks >= XK_0 && ks <= XK_9)
         return (CanvasKey)(KEY_0 + (int)(ks - XK_0));
+    if (ks == XK_F1)
+        return KEY_F1;
+    if (ks == XK_F5)
+        return KEY_F5;
+    if (ks == XK_F6)
+        return KEY_F6;
     return KEY_UNKNOWN;
 }
 
@@ -157,6 +163,12 @@ static CanvasKey event_key(X11Plat *p, xcb_keycode_t code)
         return KEY_UP;
     if (code == 116)
         return KEY_DOWN;
+    if (code == 67)
+        return KEY_F1;
+    if (code == 71)
+        return KEY_F5;
+    if (code == 72)
+        return KEY_F6;
     return KEY_UNKNOWN;
 }
 
@@ -291,6 +303,7 @@ int canvas_run(const Game *game)
 {
     Canvas c;
     X11Plat plat;
+    Game g;
     void *state = NULL;
     XVisualInfo *vi;
     int fd;
@@ -301,9 +314,10 @@ int canvas_run(const Game *game)
         fprintf(stderr, "canvas_run: no game\n");
         return 1;
     }
+    g = *game;
 
     memset(&plat, 0, sizeof(plat));
-    canvas_core_reset(&c, game->width, game->height);
+    canvas_core_reset(&c, g.width, g.height);
     c.plat = &plat;
 
     plat.dpy = XOpenDisplay(NULL);
@@ -345,7 +359,7 @@ int canvas_run(const Game *game)
                           (xcb_visualid_t)vi->visualid, mask, values);
     }
 
-    title = game->name ? game->name : "Canvas";
+    title = g.name ? g.name : "Canvas";
     canvas_plat_set_title(&c, title);
     set_size_hints(&plat, c.width, c.height);
 
@@ -379,8 +393,10 @@ int canvas_run(const Game *game)
     canvas_core_gl_setup(&c);
     canvas_sound_init(&c);
     canvas_plat_audio_start(&c);
-    if (game->init)
-        state = game->init(&c);
+    if (g.init)
+        state = g.init(&c);
+    if (canvas_hot_active())
+        canvas_hot_status(&c, "ready", 4.0f);
 
     fd = xcb_get_file_descriptor(plat.conn);
     prev = now_sec();
@@ -411,18 +427,20 @@ int canvas_run(const Game *game)
             dt = 0.05;
         c.time += (float)dt;
 
-        if (game->update)
-            game->update(state, &c, (float)dt);
+        canvas_hot_tick(&c, &g, &state);
+        if (g.update)
+            g.update(state, &c, (float)dt);
         canvas_apply_camera(&c, (float)dt);
         canvas_set_world_proj(&c);
-        if (game->render)
-            game->render(state, &c);
+        if (g.render)
+            g.render(state, &c);
+        canvas_hot_overlay(&c);
         glXSwapBuffers(plat.dpy, plat.win);
         canvas_clear_edges(&c);
     }
 
-    if (game->shutdown)
-        game->shutdown(state, &c);
+    if (g.shutdown)
+        g.shutdown(state, &c);
     canvas_plat_audio_stop(&c);
     canvas_sound_shutdown(&c);
 

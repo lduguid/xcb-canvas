@@ -174,6 +174,12 @@ static CanvasKey vk_to_key(WPARAM vk)
         return (CanvasKey)(KEY_A + (int)(vk - 'A'));
     if (vk >= '0' && vk <= '9')
         return (CanvasKey)(KEY_0 + (int)(vk - '0'));
+    if (vk == VK_F1)
+        return KEY_F1;
+    if (vk == VK_F5)
+        return KEY_F5;
+    if (vk == VK_F6)
+        return KEY_F6;
     return KEY_UNKNOWN;
 }
 
@@ -317,6 +323,7 @@ int canvas_run(const Game *game)
 {
     Canvas c;
     WinPlat plat;
+    Game g;
     void *state = NULL;
     double prev, t, dt;
     const char *title;
@@ -325,13 +332,14 @@ int canvas_run(const Game *game)
         fprintf(stderr, "canvas_run: no game\n");
         return 1;
     }
+    g = *game;
 
     memset(&plat, 0, sizeof(plat));
-    canvas_core_reset(&c, game->width, game->height);
+    canvas_core_reset(&c, g.width, g.height);
     plat.canvas = &c;
     c.plat = &plat;
 
-    title = game->name ? game->name : "Canvas";
+    title = g.name ? g.name : "Canvas";
     if (!create_gl(&plat, c.width, c.height, title)) {
         fprintf(stderr, "cannot create Win32 OpenGL window\n");
         return 1;
@@ -345,8 +353,10 @@ int canvas_run(const Game *game)
     canvas_core_gl_setup(&c);
     canvas_sound_init(&c);
     canvas_plat_audio_start(&c);
-    if (game->init)
-        state = game->init(&c);
+    if (g.init)
+        state = g.init(&c);
+    if (canvas_hot_active())
+        canvas_hot_status(&c, "ready", 4.0f);
 
     prev = now_sec();
     while (c.running) {
@@ -369,18 +379,20 @@ int canvas_run(const Game *game)
             dt = 0.05;
         c.time += (float)dt;
 
-        if (game->update)
-            game->update(state, &c, (float)dt);
+        canvas_hot_tick(&c, &g, &state);
+        if (g.update)
+            g.update(state, &c, (float)dt);
         canvas_apply_camera(&c, (float)dt);
         canvas_set_world_proj(&c);
-        if (game->render)
-            game->render(state, &c);
+        if (g.render)
+            g.render(state, &c);
+        canvas_hot_overlay(&c);
         SwapBuffers(plat.hdc);
         canvas_clear_edges(&c);
     }
 
-    if (game->shutdown)
-        game->shutdown(state, &c);
+    if (g.shutdown)
+        g.shutdown(state, &c);
     canvas_plat_audio_stop(&c);
     canvas_sound_shutdown(&c);
 

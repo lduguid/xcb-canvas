@@ -266,7 +266,7 @@ static void shutdown(void *state, Canvas *c)
     free(state);
 }
 
-static const Game game = {
+CANVAS_EXPORT const Game canvas_game = {
     .name = "Wander",
     .width = 960,
     .height = 640,
@@ -276,7 +276,9 @@ static const Game game = {
     .shutdown = shutdown,
 };
 
+#ifndef CANVAS_PLUGIN
 int main(void)
 {
-    return canvas_run(&game);
+    return canvas_run(&canvas_game);
 }
+#endif

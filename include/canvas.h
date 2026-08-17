@@ -59,8 +59,17 @@ typedef enum {
     KEY_7,
     KEY_8,
     KEY_9,
+    KEY_F1,
+    KEY_F5,
+    KEY_F6,
     KEY_COUNT
 } CanvasKey;
+
+#ifdef _WIN32
+#define CANVAS_EXPORT __declspec(dllexport)
+#else
+#define CANVAS_EXPORT
+#endif
 
 typedef struct Game {
     const char *name;
@@ -70,6 +79,8 @@ typedef struct Game {
     void (*update)(void *state, Canvas *c, float dt);
     void (*render)(void *state, Canvas *c);
     void (*shutdown)(void *state, Canvas *c);
+    /* Optional. Called after a successful F5 hot-reload with the old state. */
+    void (*hot_reload)(void *state, Canvas *c);
 } Game;
 
 typedef struct Sprite {

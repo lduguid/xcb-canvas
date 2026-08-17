@@ -40,7 +40,19 @@ struct Canvas {
     int snd_v_vol[CANVAS_SND_VOICES];
     int snd_v_loop[CANVAS_SND_VOICES];
     void *snd_lock;
+
+    char hot_msg[160];
+    float hot_msg_t;
+    int hot_hud;
 };
+
+typedef int (*CanvasHotReloadFn)(void *userdata, Game *game);
+
+void canvas_hot_setup(CanvasHotReloadFn fn, void *userdata);
+void canvas_hot_status(Canvas *c, const char *msg, float seconds);
+int canvas_hot_active(void);
+void canvas_hot_tick(Canvas *c, Game *game, void **state);
+void canvas_hot_overlay(Canvas *c);
 
 void canvas_sound_init(Canvas *c);
 void canvas_sound_shutdown(Canvas *c);

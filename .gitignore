@@ -2,7 +2,12 @@ wander
 bounce
 pacman
 plat
+canvas
 *.o
 *.exe
+*.so
+*.dll
+libcanvas_host.a
 src/*.o
 src/*.win32.o
+.hot/
