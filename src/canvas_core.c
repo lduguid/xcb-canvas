@@ -191,6 +191,13 @@ void canvas_set_key(Canvas *c, CanvasKey k, int down)
     c->key_down[k] = down;
 }
 
+void canvas_keys_release_all(Canvas *c)
+{
+    memset(c->key_down, 0, sizeof(c->key_down));
+    memset(c->key_pressed, 0, sizeof(c->key_pressed));
+    memset(c->key_released, 0, sizeof(c->key_released));
+}
+
 void canvas_clear_edges(Canvas *c)
 {
     memset(c->key_pressed, 0, sizeof(c->key_pressed));
@@ -403,6 +410,59 @@ void canvas_draw_line(Canvas *c, float x1, float y1, float x2, float y2, float r
     glColor4f(r, g, b, a);
     glBegin(GL_LINES);
     glVertex2f(x1, y1);
+    glVertex2f(x2, y2);
+    glEnd();
+}
+
+void canvas_draw_pixel(Canvas *c, float x, float y, float r, float g, float b, float a)
+{
+    canvas_fill_rect(c, x, y, 1.0f, 1.0f, r, g, b, a);
+}
+
+void canvas_fill_triangle(Canvas *c, float x0, float y0, float x1, float y1, float x2, float y2, float r,
+                          float g, float b, float a)
+{
+    (void)c;
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(r, g, b, a);
+    glBegin(GL_TRIANGLES);
+    glVertex2f(x0, y0);
+    glVertex2f(x1, y1);
+    glVertex2f(x2, y2);
+    glEnd();
+}
+
+void canvas_stroke_triangle(Canvas *c, float x0, float y0, float x1, float y1, float x2, float y2, float r,
+                            float g, float b, float a)
+{
+    (void)c;
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(r, g, b, a);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(x0, y0);
+    glVertex2f(x1, y1);
+    glVertex2f(x2, y2);
+    glEnd();
+}
+
+void canvas_fill_triangle_tex(Canvas *c, unsigned tex, float x0, float y0, float u0, float v0, float x1,
+                              float y1, float u1, float v1, float x2, float y2, float u2, float v2, float r,
+                              float g, float b, float a)
+{
+    (void)c;
+    if (!tex) {
+        canvas_fill_triangle(c, x0, y0, x1, y1, x2, y2, r, g, b, a);
+        return;
+    }
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glColor4f(r, g, b, a);
+    glBegin(GL_TRIANGLES);
+    glTexCoord2f(u0, v0);
+    glVertex2f(x0, y0);
+    glTexCoord2f(u1, v1);
+    glVertex2f(x1, y1);
+    glTexCoord2f(u2, v2);
     glVertex2f(x2, y2);
     glEnd();
 }
@@ -1130,8 +1190,9 @@ static void hot_draw_line(Canvas *c, float x, float y, const char *s, float r, f
 
 void canvas_hot_overlay(Canvas *c)
 {
-    const char *status, *line2, *line3;
-    float pw = 236.0f, ph = 52.0f, px, py;
+    const char *status, *line3;
+    char line2[48];
+    float inst, pw = 268.0f, ph = 52.0f, px, py;
     int alert;
 
     if (!c->hot_hud)
@@ -1139,10 +1200,16 @@ void canvas_hot_overlay(Canvas *c)
     if (!g_hot_fn && !c->hot_msg[0])
         return;
 
+    inst = 1.0f / (c->frame_dt > 1e-6f ? c->frame_dt : 1e-6f);
+    if (c->fps <= 1.0f)
+        c->fps = inst;
+    else
+        c->fps += (inst - c->fps) * 0.12f;
+    snprintf(line2, sizeof(line2), "F5 reload  F6 reset  %.0f fps", (double)c->fps);
+
     status = c->hot_msg[0] ? c->hot_msg : "ready";
     alert = (strstr(status, "FAIL") != NULL) || (strstr(status, "rebuild") != NULL) ||
             (strstr(status, "reload") != NULL);
-    line2 = "F5 reload   F6 reset";
     line3 = g_hot_tool[0] ? g_hot_tool : "F1 hide overlay";
     px = (float)c->width - pw - 10.0f;
     py = 8.0f;

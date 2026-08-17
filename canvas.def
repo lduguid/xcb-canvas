@@ -28,6 +28,10 @@ canvas_clear
 canvas_fill_rect
 canvas_stroke_rect
 canvas_draw_line
+canvas_draw_pixel
+canvas_fill_triangle
+canvas_stroke_triangle
+canvas_fill_triangle_tex
 canvas_draw_text
 canvas_begin_hud
 canvas_end_hud

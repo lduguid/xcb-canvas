@@ -2,7 +2,7 @@
 
 A small 2D game canvas. You write one C file, include only `include/canvas.h`, and fill in a `Game` table. The same game runs on Linux (X11) and Windows.
 
-Shipped examples: `wander` (top-down), `bounce` (camera + sprites), `pacman`, `plat` (platformer).
+Shipped examples: `wander` (top-down), `bounce` (camera + sprites), `pacman`, `plat` (platformer), `vector` (wireframe 3D), `crate` (textured triangles).
 
 ## Build and run
 
@@ -27,7 +27,7 @@ plat.exe
 |-----|--------|
 | F5 | Rebuild the game plugin and keep heap state |
 | F6 | Rebuild and call `shutdown` + `init` again |
-| F1 | Hide / show the overlay |
+| F1 | Hide / show the overlay (status, reload keys, FPS) |
 
 On Windows, F5 uses MinGW-w64 by default. To use Visual Studio's `cl` instead:
 
@@ -187,10 +187,16 @@ canvas_clear(c, r, g, b);
 canvas_fill_rect(c, x, y, w, h, r, g, b, a);
 canvas_stroke_rect(c, x, y, w, h, r, g, b, a);
 canvas_draw_line(c, x1, y1, x2, y2, r, g, b, a);
+canvas_draw_pixel(c, x, y, r, g, b, a);
+canvas_fill_triangle(c, x0, y0, x1, y1, x2, y2, r, g, b, a);
+canvas_stroke_triangle(c, x0, y0, x1, y1, x2, y2, r, g, b, a);
+canvas_fill_triangle_tex(c, tex, x0, y0, u0, v0, x1, y1, u1, v1, x2, y2, u2, v2, r, g, b, a);
 canvas_draw_text(c, x, y, "hello", r, g, b);
 ```
 
 Text is a small built-in bitmap font. It is drawn in the current space (world or HUD).
+
+`vector` is a software 3D example (Battlezone-style tanks). `crate` maps a texture onto a spinning cube with `canvas_fill_triangle_tex` (affine UVs after the game projects to 2D). Clipping, lighting, and projection stay in the game. A later full framebuffer software rasterizer can wait until you are plotting tens of thousands of pixels per frame.
 
 **HUD** (score, lives) should ignore the camera:
 
@@ -372,7 +378,7 @@ From `include/canvas.h`:
 
 **Camera:** `canvas_cam_set`, `canvas_cam_get`, `canvas_cam_follow`, `canvas_cam_bounds`, `canvas_cam_zoom`, `canvas_cam_zoom_get`, `canvas_view`, `canvas_screen_to_world`
 
-**Draw:** `canvas_clear`, `canvas_fill_rect`, `canvas_stroke_rect`, `canvas_draw_line`, `canvas_draw_text`, `canvas_begin_hud`, `canvas_end_hud`
+**Draw:** `canvas_clear`, `canvas_fill_rect`, `canvas_stroke_rect`, `canvas_draw_line`, `canvas_draw_pixel`, `canvas_fill_triangle`, `canvas_stroke_triangle`, `canvas_fill_triangle_tex`, `canvas_draw_text`, `canvas_begin_hud`, `canvas_end_hud`
 
 **Images:** `canvas_texture_file`, `canvas_image_info`, `canvas_texture_rgba`, `canvas_texture_solid`, `canvas_texture_nearest`, `sprite_init`, `sprite_update`, `canvas_draw_sprite`, `canvas_blit`
 

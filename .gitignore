@@ -2,6 +2,8 @@ wander
 bounce
 pacman
 plat
+vector
+crate
 canvas
 *.o
 *.exe

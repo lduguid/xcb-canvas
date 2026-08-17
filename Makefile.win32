@@ -9,7 +9,7 @@
 
 TOOLSET ?= mingw
 
-GAMES = wander bounce pacman plat
+GAMES = wander bounce pacman plat vector crate
 PLUGINS = $(addsuffix .dll,$(GAMES))
 HOSTS = $(addsuffix .exe,$(GAMES)) canvas.exe
 HOST_SRC = src/canvas_host.c
@@ -65,6 +65,12 @@ pacman.exe: $(HOST_SRC) canvas.dll
 plat.exe: $(HOST_SRC) canvas.dll
 	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"plat\" $(HOST_SRC) /Fe:plat.exe /link canvas.lib
 
+vector.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"vector\" $(HOST_SRC) /Fe:vector.exe /link canvas.lib
+
+crate.exe: $(HOST_SRC) canvas.dll
+	$(CL) $(CLFLAGS) /DCANVAS_LAUNCH=\"crate\" $(HOST_SRC) /Fe:crate.exe /link canvas.lib
+
 wander.dll: games/wander.c canvas.dll include/canvas.h
 	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/wander.c /Fe:wander.dll /link canvas.lib
 
@@ -76,6 +82,12 @@ pacman.dll: games/pacman.c canvas.dll include/canvas.h
 
 plat.dll: games/plat.c canvas.dll include/canvas.h
 	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/plat.c /Fe:plat.dll /link canvas.lib
+
+vector.dll: games/vector.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/vector.c /Fe:vector.dll /link canvas.lib
+
+crate.dll: games/crate.c canvas.dll include/canvas.h
+	$(CL) $(CLFLAGS) /DCANVAS_PLUGIN /LD games/crate.c /Fe:crate.dll /link canvas.lib
 
 else
 
@@ -128,6 +140,12 @@ pacman.exe: $(HOST_SRC) canvas.dll
 plat.exe: $(HOST_SRC) canvas.dll
 	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"plat\" -o $@ $(HOST_SRC) -L. -lcanvas
 
+vector.exe: $(HOST_SRC) canvas.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"vector\" -o $@ $(HOST_SRC) -L. -lcanvas
+
+crate.exe: $(HOST_SRC) canvas.dll
+	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"crate\" -o $@ $(HOST_SRC) -L. -lcanvas
+
 wander.dll: games/wander.c canvas.dll
 	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/wander.c -L. -lcanvas
 
@@ -140,10 +158,16 @@ pacman.dll: games/pacman.c canvas.dll
 plat.dll: games/plat.c canvas.dll
 	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/plat.c -L. -lcanvas
 
+vector.dll: games/vector.c canvas.dll
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/vector.c -L. -lcanvas
+
+crate.dll: games/crate.c canvas.dll
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/crate.c -L. -lcanvas
+
 endif
 
 clean:
-	rm -f wander.exe bounce.exe pacman.exe plat.exe canvas.exe src/*.win32.o
+	rm -f wander.exe bounce.exe pacman.exe plat.exe vector.exe crate.exe canvas.exe src/*.win32.o
 	rm -f *.dll libcanvas.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
 	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj
 	rm -rf .hot

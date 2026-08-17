@@ -208,6 +208,10 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
             }
         }
         return 0;
+    case WM_KILLFOCUS:
+        if (c)
+            canvas_keys_release_all(c);
+        return 0;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
         if (c)
@@ -375,6 +379,7 @@ int canvas_run(const Game *game)
         prev = t;
         if (dt < 0.0)
             dt = 0.0;
+        c.frame_dt = (float)(dt > 1e-6 ? dt : 1e-6);
         if (dt > 0.05)
             dt = 0.05;
         c.time += (float)dt;

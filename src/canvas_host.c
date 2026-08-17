@@ -733,8 +733,8 @@ int main(int argc, char **argv)
     if (argc < 2) {
         fprintf(stderr,
                 "usage: canvas <game>\n"
-                "  games: wander bounce pacman plat\n"
-                "  or run ./plat ./wander ./bounce ./pacman\n"
+                "  games: wander bounce pacman plat vector crate\n"
+                "  or run ./plat ./wander ./bounce ./pacman ./vector ./crate\n"
                 "  F5  rebuild + reload plugin, keep heap state\n"
                 "  F6  rebuild + reload plugin, re-init state\n"
 #ifdef _WIN32

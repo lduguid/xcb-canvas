@@ -44,6 +44,8 @@ struct Canvas {
     char hot_msg[160];
     float hot_msg_t;
     int hot_hud;
+    float frame_dt; /* raw seconds for last frame, before the gameplay cap */
+    float fps;
 };
 
 typedef int (*CanvasHotReloadFn)(void *userdata, Game *game);
@@ -64,6 +66,7 @@ void canvas_plat_audio_stop(Canvas *c);
 void canvas_core_reset(Canvas *c, int width, int height);
 void canvas_core_gl_setup(Canvas *c);
 void canvas_set_key(Canvas *c, CanvasKey k, int down);
+void canvas_keys_release_all(Canvas *c);
 void canvas_clear_edges(Canvas *c);
 void canvas_apply_camera(Canvas *c, float dt);
 void canvas_set_world_proj(const Canvas *c);

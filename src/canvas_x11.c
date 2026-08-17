@@ -174,7 +174,9 @@ static CanvasKey event_key(X11Plat *p, xcb_keycode_t code)
 
 static void take_focus(X11Plat *p)
 {
-    xcb_set_input_focus(p->conn, XCB_INPUT_FOCUS_POINTER_ROOT, p->win, XCB_CURRENT_TIME);
+    /* Focus the window itself. POINTER_ROOT sends keys to whatever is under
+     * the mouse, so turning with the pointer off the window looks like a dead keyboard. */
+    xcb_set_input_focus(p->conn, XCB_INPUT_FOCUS_PARENT, p->win, XCB_CURRENT_TIME);
 }
 
 static void handle_event(Canvas *c, xcb_generic_event_t *ev)
@@ -183,9 +185,14 @@ static void handle_event(Canvas *c, xcb_generic_event_t *ev)
 
     switch (ev->response_type & ~0x80) {
     case XCB_MAP_NOTIFY:
-    case XCB_ENTER_NOTIFY:
         take_focus(p);
         break;
+    case XCB_FOCUS_OUT: {
+        xcb_focus_out_event_t *fo = (xcb_focus_out_event_t *)ev;
+        if (fo->mode != XCB_NOTIFY_MODE_GRAB && fo->mode != XCB_NOTIFY_MODE_UNGRAB)
+            canvas_keys_release_all(c);
+        break;
+    }
     case XCB_CONFIGURE_NOTIFY: {
         xcb_configure_notify_event_t *cfg = (xcb_configure_notify_event_t *)ev;
         if (cfg->width > 0 && cfg->height > 0 && (cfg->width != c->width || cfg->height != c->height)) {
@@ -423,6 +430,7 @@ int canvas_run(const Game *game)
         prev = t;
         if (dt < 0.0)
             dt = 0.0;
+        c.frame_dt = (float)(dt > 1e-6 ? dt : 1e-6);
         if (dt > 0.05)
             dt = 0.05;
         c.time += (float)dt;

@@ -154,6 +154,15 @@ CANVAS_API void canvas_clear(Canvas *c, float r, float g, float b);
 CANVAS_API void canvas_fill_rect(Canvas *c, float x, float y, float w, float h, float r, float g, float b, float a);
 CANVAS_API void canvas_stroke_rect(Canvas *c, float x, float y, float w, float h, float r, float g, float b, float a);
 CANVAS_API void canvas_draw_line(Canvas *c, float x1, float y1, float x2, float y2, float r, float g, float b, float a);
+CANVAS_API void canvas_draw_pixel(Canvas *c, float x, float y, float r, float g, float b, float a);
+CANVAS_API void canvas_fill_triangle(Canvas *c, float x0, float y0, float x1, float y1, float x2, float y2,
+                                     float r, float g, float b, float a);
+CANVAS_API void canvas_stroke_triangle(Canvas *c, float x0, float y0, float x1, float y1, float x2, float y2,
+                                       float r, float g, float b, float a);
+/* Affine textured triangle. tex is a canvas_texture_* id; UV is 0–1. Tint with rgba. */
+CANVAS_API void canvas_fill_triangle_tex(Canvas *c, unsigned tex, float x0, float y0, float u0, float v0,
+                                         float x1, float y1, float u1, float v1, float x2, float y2, float u2,
+                                         float v2, float r, float g, float b, float a);
 CANVAS_API void canvas_draw_text(Canvas *c, float x, float y, const char *s, float r, float g, float b);
 
 CANVAS_API void canvas_begin_hud(Canvas *c);
