@@ -187,7 +187,7 @@ static void load_level(Plat *p)
 
 static void *init(Canvas *c)
 {
-    Plat *p = calloc(1, sizeof(*p));
+    Plat *p = canvas_calloc(1, sizeof(*p));
     load_or_solid(c, &p->tile_sheet, "assets/plat/tiles.png", 16, 16);
     load_or_solid(c, &p->hero_sheet, "assets/plat/hero.png", 16, 24);
     load_or_solid(c, &p->mob_sheet, "assets/plat/mob.png", 16, 16);
@@ -633,7 +633,7 @@ static void render(void *state, Canvas *c)
 static void shutdown(void *state, Canvas *c)
 {
     (void)c;
-    free(state);
+    canvas_free(state);
 }
 
 CANVAS_EXPORT const Game canvas_game = {

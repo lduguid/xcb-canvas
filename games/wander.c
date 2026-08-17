@@ -30,7 +30,7 @@ static void load_or_solid(Canvas *c, Sheet *s, const char *path, int cw, int ch)
 
 static void *init(Canvas *c)
 {
-    Wander *w = calloc(1, sizeof(*w));
+    Wander *w = canvas_calloc(1, sizeof(*w));
     int i;
 
     load_or_solid(c, &w->tiles, "assets/wander/tiles.png", 16, 16);
@@ -182,7 +182,7 @@ static void render(void *state, Canvas *c)
 static void shutdown(void *state, Canvas *c)
 {
     (void)c;
-    free(state);
+    canvas_free(state);
 }
 
 CANVAS_EXPORT const Game canvas_game = {

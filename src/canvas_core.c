@@ -266,6 +266,23 @@ float canvas_time(const Canvas *c) { return c->time; }
 int canvas_resized(const Canvas *c) { return c->resized; }
 void canvas_quit(Canvas *c) { c->running = 0; }
 
+void *canvas_alloc(size_t n)
+{
+    return n ? malloc(n) : NULL;
+}
+
+void *canvas_calloc(size_t n, size_t sz)
+{
+    if (!n || !sz)
+        return NULL;
+    return calloc(n, sz);
+}
+
+void canvas_free(void *p)
+{
+    free(p);
+}
+
 void canvas_set_title(Canvas *c, const char *title)
 {
     canvas_plat_set_title(c, title ? title : "");
@@ -769,6 +786,29 @@ void canvas_sound_init(Canvas *c)
 #endif
 }
 
+/* Drop clips and voices but keep the mixer lock. Used on F6 so init() can
+ * allocate sounds again without leaking into CANVAS_SND_CLIPS. */
+static void canvas_sound_reset(Canvas *c)
+{
+    int i;
+    if (!c)
+        return;
+    if (c->snd_lock)
+        SND_LOCK(c);
+    for (i = 1; i <= c->snd_n && i < CANVAS_SND_CLIPS; i++) {
+        free(c->snd_pcm[i]);
+        c->snd_pcm[i] = NULL;
+        c->snd_len[i] = 0;
+    }
+    c->snd_n = 0;
+    memset(c->snd_v_clip, 0, sizeof(c->snd_v_clip));
+    memset(c->snd_v_pos, 0, sizeof(c->snd_v_pos));
+    memset(c->snd_v_vol, 0, sizeof(c->snd_v_vol));
+    memset(c->snd_v_loop, 0, sizeof(c->snd_v_loop));
+    if (c->snd_lock)
+        SND_UNLOCK(c);
+}
+
 void canvas_sound_shutdown(Canvas *c)
 {
     int i;
@@ -996,6 +1036,7 @@ void canvas_sound_stop(Canvas *c, unsigned id)
 
 static CanvasHotReloadFn g_hot_fn;
 static void *g_hot_ud;
+static int g_hot_kept_state;
 
 static char g_hot_tool[64];
 
@@ -1052,23 +1093,33 @@ void canvas_hot_tick(Canvas *c, Game *game, void **state)
     }
     c->hot_hud = 1;
     canvas_hot_status(c, reset ? "rebuilding (reset)..." : "rebuilding...", 8.0f);
+    /* After F5 the live heap may still belong to an unloaded plugin CRT.
+     * free() then aborts the process. Only shut down when this plugin allocated. */
+    if (reset) {
+        if (*state && game->shutdown && !g_hot_kept_state)
+            game->shutdown(*state, c);
+        *state = NULL;
+        canvas_sound_reset(c);
+    }
     {
         Game next = *game;
         if (g_hot_fn(g_hot_ud, &next) != 0) {
+            if (reset && game->init)
+                *state = game->init(c);
+            g_hot_kept_state = 0;
             canvas_hot_status(c, "FAILED — see terminal", 8.0f);
             return;
         }
         *game = next;
         if (reset) {
-            if (*state && game->shutdown)
-                game->shutdown(*state, c);
             *state = game->init ? game->init(c) : NULL;
-            canvas_hot_status(c, "reloaded + reset", 6.0f);
+            g_hot_kept_state = 0;
         } else {
             if (game->hot_reload && *state)
                 game->hot_reload(*state, c);
-            canvas_hot_status(c, "reloaded, state kept", 6.0f);
+            g_hot_kept_state = 1;
         }
+        canvas_hot_status(c, reset ? "reloaded + reset" : "reloaded, state kept", 6.0f);
     }
 }
 

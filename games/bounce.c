@@ -18,7 +18,7 @@ typedef struct {
 
 static void *init(Canvas *c)
 {
-    Bounce *b = calloc(1, sizeof(*b));
+    Bounce *b = canvas_calloc(1, sizeof(*b));
     int i;
 
     if (!canvas_sheet_load(c, &b->balls_sheet, "assets/bounce/balls.png", 16, 16)) {
@@ -149,7 +149,7 @@ static void render(void *state, Canvas *c)
 static void shutdown(void *state, Canvas *c)
 {
     (void)c;
-    free(state);
+    canvas_free(state);
 }
 
 CANVAS_EXPORT const Game canvas_game = {

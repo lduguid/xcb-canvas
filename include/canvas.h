@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
+
 typedef struct Canvas Canvas;
 
 typedef enum {
@@ -188,6 +190,12 @@ CANVAS_API unsigned canvas_sound_noise(Canvas *c, float ms, float amp);
 CANVAS_API void canvas_sound_play(Canvas *c, unsigned id, float vol);
 CANVAS_API void canvas_sound_loop(Canvas *c, unsigned id, float vol);
 CANVAS_API void canvas_sound_stop(Canvas *c, unsigned id);
+
+/* Heap that lives in canvas.dll. Use these in init/shutdown so F5/F6 can
+ * unload the game plugin without free() hitting a dead MinGW CRT. */
+CANVAS_API void *canvas_alloc(size_t n);
+CANVAS_API void *canvas_calloc(size_t n, size_t sz);
+CANVAS_API void canvas_free(void *p);
 
 #ifdef __cplusplus
 }

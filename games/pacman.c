@@ -213,7 +213,7 @@ static void reset_actors(Pacman *p)
 
 static void *init(Canvas *c)
 {
-    Pacman *p = calloc(1, sizeof(*p));
+    Pacman *p = canvas_calloc(1, sizeof(*p));
     int i;
     for (i = 0; i < ROWS; i++)
         memcpy(p->tiles[i], LEVEL[i], COLS);
@@ -746,7 +746,7 @@ static void update_wrap(void *state, Canvas *c, float dt)
 static void shutdown(void *state, Canvas *c)
 {
     (void)c;
-    free(state);
+    canvas_free(state);
 }
 
 CANVAS_EXPORT const Game canvas_game = {
