@@ -342,6 +342,7 @@ int canvas_run(const Game *game)
     canvas_core_reset(&c, g.width, g.height);
     plat.canvas = &c;
     c.plat = &plat;
+    canvas_session_begin(&c, g.name);
 
     title = g.name ? g.name : "Canvas";
     if (!create_gl(&plat, c.width, c.height, title)) {
@@ -379,23 +380,18 @@ int canvas_run(const Game *game)
         prev = t;
         if (dt < 0.0)
             dt = 0.0;
-        c.frame_dt = (float)(dt > 1e-6 ? dt : 1e-6);
-        if (dt > 0.05)
-            dt = 0.05;
-        c.time += (float)dt;
-
-        canvas_hot_tick(&c, &g, &state);
-        if (g.update)
-            g.update(state, &c, (float)dt);
-        canvas_apply_camera(&c, (float)dt);
+        canvas_session_pump(&c, &g, &state, (float)dt);
         canvas_set_world_proj(&c);
         if (g.render)
             g.render(state, &c);
         canvas_hot_overlay(&c);
+        canvas_session_overlay(&c);
         SwapBuffers(plat.hdc);
-        canvas_clear_edges(&c);
+        if (c.lock_dt <= 0.0f)
+            canvas_clear_edges(&c);
     }
 
+    canvas_session_end(&c);
     if (g.shutdown)
         g.shutdown(state, &c);
     canvas_plat_audio_stop(&c);

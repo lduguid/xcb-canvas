@@ -1,0 +1,33 @@
+Flare art sample (CC-BY-SA 3.0)
+================================
+
+These files are copied from Flare: Empyrean Campaign.
+
+  Art / game data:  https://github.com/flareteam/flare-game
+  Flare engine:     https://github.com/flareteam/flare-engine
+
+Art and data for Flare: Empyrean Campaign are released under
+Creative Commons Attribution-ShareAlike 3.0 (later versions permitted).
+Copyright ©2010–2013 Clint Bellanger. Contributors retain copyrights
+to their original contributions.
+
+Files in this folder (and derivatives) remain CC-BY-SA 3.0.
+
+  icons.png                 mods/fantasycore/images/icons/icons.png
+  portraits/male01.png      mods/fantasycore/images/portraits/male01.png
+
+World tiles (cropped/resized from art_src/tilesets, still CC-BY-SA):
+
+  tiles/haven.png           grassland/path.png + dungeon/greystone.jpg
+  tiles/wilds.png           grassland/grass_overcast.png + rock_diffuse.png
+  tiles/dungeon.png         dungeon/stone_floor.jpg + stone_tiles.png
+                            + brownstone.jpg
+  tiles/portal.png          teleport/rune1.png
+
+Grassland texture artists (from art_src/tilesets/grassland/CREDITS.txt):
+  path.png — Clint Bellanger, from Sindwiller brick + Lamoot/Blender grass
+  grass_overcast.png — Lamoot, Blender Foundation | apricot.blender.org (CC-BY 3.0)
+  rock_diffuse.png — Yughues (Public Domain)
+
+Full credits: https://github.com/flareteam/flare-game/wiki/Credits
+License text: https://creativecommons.org/licenses/by-sa/3.0/

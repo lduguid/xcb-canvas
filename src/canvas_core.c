@@ -1,6 +1,7 @@
 #include "canvas_internal.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,8 +16,14 @@
 #ifndef GL_CLAMP
 #define GL_CLAMP 0x2900
 #endif
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 #else
 #include <GL/gl.h>
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 #endif
 
 #ifndef M_PI
@@ -370,6 +377,458 @@ void canvas_screen_to_world(const Canvas *c, float sx, float sy, float *wx, floa
         *wy = c->cam_y + sy / c->zoom;
 }
 
+void canvas_world_to_screen(const Canvas *c, float wx, float wy, float *sx, float *sy)
+{
+    if (sx)
+        *sx = (wx - c->cam_x) * c->zoom;
+    if (sy)
+        *sy = (wy - c->cam_y) * c->zoom;
+}
+
+unsigned canvas_seed(const Canvas *c)
+{
+    return c ? c->seed : 0;
+}
+
+int canvas_replaying(const Canvas *c)
+{
+    return c && c->replaying;
+}
+
+void canvas_inject_key(Canvas *c, CanvasKey key, int down)
+{
+    canvas_set_key(c, key, down);
+}
+
+void canvas_inject_mouse(Canvas *c, int x, int y)
+{
+    if (!c)
+        return;
+    c->mouse_x = x;
+    c->mouse_y = y;
+}
+
+void canvas_inject_click(Canvas *c, int button)
+{
+    if (!c || button < 1 || button > 3)
+        return;
+    c->mouse_down[button] = 1;
+    c->mouse_pressed[button] = 1;
+}
+
+static void json_esc(char *dst, size_t n, const char *s)
+{
+    size_t o = 0;
+
+    if (!dst || n == 0)
+        return;
+    if (!s)
+        s = "";
+    while (*s && o + 2 < n) {
+        if (*s == '"' || *s == '\\') {
+            if (o + 3 >= n)
+                break;
+            dst[o++] = '\\';
+            dst[o++] = *s++;
+        } else if ((unsigned char)*s < 32) {
+            s++;
+        } else {
+            dst[o++] = *s++;
+        }
+    }
+    dst[o] = 0;
+}
+
+static const char *log_key_name(int k)
+{
+    static const char *n[KEY_COUNT] = {
+        "?", "left", "right", "up", "down", "space", "enter", "esc", "tab", "shift", "ctrl", "alt",
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+        "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        "f1", "f5", "f6"
+    };
+    if (k <= 0 || k >= KEY_COUNT)
+        return "?";
+    return n[k] ? n[k] : "?";
+}
+
+static int log_key_from_name(const char *s)
+{
+    int k;
+
+    if (!s || !s[0])
+        return 0;
+    for (k = 1; k < KEY_COUNT; k++) {
+        if (strcmp(log_key_name(k), s) == 0)
+            return k;
+    }
+    return 0;
+}
+
+static void keys_csv(const int *on, char *dst, size_t n)
+{
+    int i, first = 1;
+
+    if (!dst || n == 0)
+        return;
+    dst[0] = 0;
+    for (i = 1; i < KEY_COUNT; i++) {
+        if (!on[i])
+            continue;
+        if (!first)
+            strncat(dst, ",", n - strlen(dst) - 1);
+        strncat(dst, log_key_name(i), n - strlen(dst) - 1);
+        first = 0;
+    }
+}
+
+static const char *json_field(const char *line, const char *key)
+{
+    char pat[72];
+    const char *p;
+
+    snprintf(pat, sizeof(pat), "\"%s\":", key);
+    p = strstr(line, pat);
+    if (!p)
+        return NULL;
+    p += strlen(pat);
+    while (*p == ' ')
+        p++;
+    return p;
+}
+
+static int json_str(const char *line, const char *key, char *out, size_t n)
+{
+    const char *p = json_field(line, key);
+    size_t o = 0;
+
+    if (!out || n == 0)
+        return 0;
+    out[0] = 0;
+    if (!p || *p != '"')
+        return 0;
+    p++;
+    while (*p && *p != '"' && o + 1 < n) {
+        if (*p == '\\' && p[1])
+            p++;
+        out[o++] = *p++;
+    }
+    out[o] = 0;
+    return 1;
+}
+
+static int json_num(const char *line, const char *key, double *out)
+{
+    const char *p = json_field(line, key);
+
+    if (!p || !out)
+        return 0;
+    *out = strtod(p, NULL);
+    return 1;
+}
+
+typedef struct {
+    float t;
+    int mx, my, click, pulse;
+    char down[64];
+    char up[64];
+} ReplayEv;
+
+static struct {
+    ReplayEv *ev;
+    int n, i, cap, done;
+    int down[KEY_COUNT];
+    char pulse_up[64];
+} replay;
+
+static void replay_free(void)
+{
+    free(replay.ev);
+    memset(&replay, 0, sizeof(replay));
+}
+
+static void replay_push(ReplayEv e)
+{
+    if (replay.n >= replay.cap) {
+        int cap = replay.cap ? replay.cap * 2 : 256;
+        ReplayEv *n = realloc(replay.ev, (size_t)cap * sizeof(*n));
+        if (!n)
+            return;
+        replay.ev = n;
+        replay.cap = cap;
+    }
+    replay.ev[replay.n++] = e;
+}
+
+static void replay_apply_csv(Canvas *c, const char *csv, int down)
+{
+    char buf[64], *p, *tok;
+
+    if (!csv || !csv[0])
+        return;
+    snprintf(buf, sizeof(buf), "%s", csv);
+    p = buf;
+    while (p && *p) {
+        int k;
+        tok = p;
+        p = strchr(p, ',');
+        if (p)
+            *p++ = 0;
+        k = log_key_from_name(tok);
+        if (!k || k == KEY_F5 || k == KEY_F6 || k == KEY_ESCAPE)
+            continue;
+        if (down) {
+            if (!replay.down[k])
+                c->key_pressed[k] = 1;
+            replay.down[k] = 1;
+        } else {
+            if (replay.down[k])
+                c->key_released[k] = 1;
+            replay.down[k] = 0;
+        }
+        c->key_down[k] = replay.down[k];
+    }
+}
+
+static int replay_load(Canvas *c, const char *path)
+{
+    FILE *f;
+    char line[1024], ev[24];
+    double t, seed, dt, mx, my, click;
+
+    f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "canvas: cannot open CANVAS_REPLAY %s\n", path);
+        return 0;
+    }
+    replay_free();
+    while (fgets(line, sizeof(line), f)) {
+        if (!json_str(line, "ev", ev, sizeof(ev)))
+            continue;
+        if (strcmp(ev, "session") == 0) {
+            if (json_num(line, "seed", &seed))
+                c->seed = (unsigned)seed;
+            if (json_num(line, "dt", &dt) && dt > 0.0)
+                c->lock_dt = (float)dt;
+        } else if (strcmp(ev, "input") == 0) {
+            ReplayEv e;
+            memset(&e, 0, sizeof(e));
+            if (json_num(line, "t", &t))
+                e.t = (float)t;
+            if (json_num(line, "mx", &mx))
+                e.mx = (int)mx;
+            if (json_num(line, "my", &my))
+                e.my = (int)my;
+            if (json_num(line, "click", &click))
+                e.click = (int)click;
+            json_str(line, "down", e.down, sizeof(e.down));
+            if (!e.down[0]) {
+                if (json_str(line, "keys", e.down, sizeof(e.down)) && e.down[0])
+                    e.pulse = 1; /* older logs had no key-up */
+            }
+            json_str(line, "up", e.up, sizeof(e.up));
+            replay_push(e);
+        }
+    }
+    fclose(f);
+    c->replaying = 1;
+    if (c->lock_dt <= 0.0f)
+        c->lock_dt = 1.0f / 60.0f;
+    fprintf(stderr, "canvas: replay %s  (%d input events, seed %u)\n", path, replay.n, c->seed);
+    return 1;
+}
+
+static void canvas_replay_apply(Canvas *c)
+{
+    int esc, i;
+
+    if (!c || !c->replaying)
+        return;
+    esc = c->key_pressed[KEY_ESCAPE] || c->key_down[KEY_ESCAPE] || c->key_pressed[KEY_Q];
+    memset(c->key_pressed, 0, sizeof(c->key_pressed));
+    memset(c->key_released, 0, sizeof(c->key_released));
+    memset(c->mouse_pressed, 0, sizeof(c->mouse_pressed));
+    if (replay.pulse_up[0]) {
+        replay_apply_csv(c, replay.pulse_up, 0);
+        replay.pulse_up[0] = 0;
+    }
+    memcpy(c->key_down, replay.down, sizeof(c->key_down));
+    while (replay.i < replay.n && replay.ev[replay.i].t <= c->time + 0.0005f) {
+        ReplayEv *e = &replay.ev[replay.i++];
+        c->mouse_x = e->mx;
+        c->mouse_y = e->my;
+        replay_apply_csv(c, e->down, 1);
+        replay_apply_csv(c, e->up, 0);
+        if (e->pulse && e->down[0])
+            snprintf(replay.pulse_up, sizeof(replay.pulse_up), "%s", e->down);
+        if (e->click >= 1 && e->click <= 3) {
+            c->mouse_pressed[e->click] = 1;
+            c->mouse_down[e->click] = 1;
+        }
+    }
+    if (replay.i >= replay.n)
+        replay.done = 1;
+    for (i = 1; i <= 3; i++) {
+        if (!c->mouse_pressed[i])
+            c->mouse_down[i] = 0;
+    }
+    if (esc) {
+        c->key_down[KEY_ESCAPE] = 1;
+        c->key_pressed[KEY_ESCAPE] = 1;
+    }
+}
+
+void canvas_session_pump(Canvas *c, Game *g, void **state, float wall_dt)
+{
+    float dt;
+    int steps = 0;
+
+    if (!c)
+        return;
+    if (wall_dt < 0.0f)
+        wall_dt = 0.0f;
+    c->frame_dt = wall_dt > 1e-6f ? (float)wall_dt : 1e-6f;
+    if (c->lock_dt > 0.0f) {
+        if (wall_dt > 0.25f)
+            wall_dt = 0.25f;
+        c->sim_acc += (float)wall_dt;
+        while (c->sim_acc >= c->lock_dt && steps < 8) {
+            c->sim_acc -= c->lock_dt;
+            dt = c->lock_dt;
+            c->time += dt;
+            canvas_replay_apply(c);
+            canvas_hot_tick(c, g, state);
+            if (g && g->update)
+                g->update(*state, c, dt);
+            canvas_session_tick(c, g, state ? *state : NULL);
+            canvas_apply_camera(c, dt);
+            canvas_clear_edges(c);
+            steps++;
+        }
+        return;
+    }
+    dt = (float)wall_dt;
+    if (dt > 0.05f)
+        dt = 0.05f;
+    c->time += dt;
+    canvas_replay_apply(c);
+    canvas_hot_tick(c, g, state);
+    if (g && g->update)
+        g->update(*state, c, dt);
+    canvas_session_tick(c, g, state ? *state : NULL);
+    canvas_apply_camera(c, dt);
+}
+
+void canvas_trace(Canvas *c, const char *kind, const char *fmt, ...)
+{
+    char msg[192], esc[256], kesc[48];
+    va_list ap;
+
+    if (!c || !c->log)
+        return;
+    msg[0] = 0;
+    if (fmt) {
+        va_start(ap, fmt);
+        vsnprintf(msg, sizeof(msg), fmt, ap);
+        va_end(ap);
+    }
+    json_esc(esc, sizeof(esc), msg);
+    json_esc(kesc, sizeof(kesc), kind ? kind : "event");
+    fprintf(c->log, "{\"t\":%.3f,\"ev\":\"trace\",\"kind\":\"%s\",\"msg\":\"%s\"}\n", (double)c->time, kesc, esc);
+    fflush(c->log);
+}
+
+void canvas_session_begin(Canvas *c, const char *game_name)
+{
+    const char *path, *seed_e, *rep;
+    char gesc[64];
+
+    replay_free();
+    c->replaying = 0;
+    c->lock_dt = 0;
+    seed_e = getenv("CANVAS_SEED");
+    if (seed_e && seed_e[0])
+        c->seed = (unsigned)strtoul(seed_e, NULL, 10);
+    rep = getenv("CANVAS_REPLAY");
+    if (rep && rep[0])
+        replay_load(c, rep);
+    path = getenv("CANVAS_LOG");
+    if (c->replaying || (path && path[0]))
+        c->lock_dt = c->lock_dt > 0.0f ? c->lock_dt : (1.0f / 60.0f);
+    if (!path || !path[0] || c->replaying)
+        return;
+    if (path[0] == '-' && path[1] == 0)
+        c->log = stdout;
+    else
+        c->log = fopen(path, "w");
+    if (!c->log)
+        return;
+    json_esc(gesc, sizeof(gesc), game_name ? game_name : "game");
+    fprintf(c->log, "{\"t\":0,\"ev\":\"session\",\"game\":\"%s\",\"seed\":%u,\"dt\":%.6f,\"w\":%d,\"h\":%d}\n",
+            gesc, c->seed, (double)c->lock_dt, c->width, c->height);
+    fflush(c->log);
+}
+
+void canvas_session_tick(Canvas *c, const Game *g, void *state)
+{
+    char obs[768], down[96], up[96], held[96];
+    int click = 0, changed, any;
+
+    if (!c || !c->log || c->replaying)
+        return;
+    keys_csv(c->key_pressed, down, sizeof(down));
+    keys_csv(c->key_released, up, sizeof(up));
+    keys_csv(c->key_down, held, sizeof(held));
+    if (c->mouse_pressed[1])
+        click = 1;
+    else if (c->mouse_pressed[2])
+        click = 2;
+    else if (c->mouse_pressed[3])
+        click = 3;
+    any = down[0] || up[0] || click;
+    if (any)
+        fprintf(c->log,
+                "{\"t\":%.3f,\"ev\":\"input\",\"down\":\"%s\",\"up\":\"%s\",\"held\":\"%s\","
+                "\"mx\":%d,\"my\":%d,\"click\":%d}\n",
+                (double)c->time, down, up, held, c->mouse_x, c->mouse_y, click);
+    obs[0] = 0;
+    if (g && g->observe)
+        g->observe(state, c, obs, sizeof(obs));
+    changed = obs[0] && strcmp(obs, c->log_obs) != 0;
+    if (changed || (obs[0] && c->time - c->log_obs_t >= 1.0f)) {
+        fprintf(c->log, "{\"t\":%.3f,\"ev\":\"state\",\"data\":%s}\n", (double)c->time, obs[0] ? obs : "{}");
+        snprintf(c->log_obs, sizeof(c->log_obs), "%s", obs);
+        c->log_obs_t = c->time;
+        fflush(c->log);
+    }
+}
+
+void canvas_session_end(Canvas *c)
+{
+    if (c && c->log) {
+        fprintf(c->log, "{\"t\":%.3f,\"ev\":\"end\"}\n", (double)c->time);
+        if (c->log != stdout)
+            fclose(c->log);
+        c->log = NULL;
+    }
+    replay_free();
+}
+
+void canvas_session_overlay(Canvas *c)
+{
+    char line[64];
+
+    if (!c || !c->replaying)
+        return;
+    canvas_begin_hud(c);
+    if (replay.done)
+        snprintf(line, sizeof(line), "REPLAY  ended   %.1fs", (double)c->time);
+    else
+        snprintf(line, sizeof(line), "REPLAY  %.1fs   %d/%d", (double)c->time, replay.i, replay.n);
+    canvas_draw_text(c, 12, 40, line, 0.95f, 0.82f, 0.35f);
+    canvas_end_hud(c);
+}
+
 void canvas_clear(Canvas *c, float r, float g, float b)
 {
     (void)c;
@@ -525,8 +984,8 @@ unsigned canvas_texture_rgba(Canvas *c, int w, int h, const unsigned char *rgba)
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
     return tex;
 }
@@ -652,10 +1111,11 @@ static void sheet_uv(const Sheet *sheet, int index, float *u0, float *v0, float 
     row = sheet->cols > 0 ? index / sheet->cols : 0;
     tw = sheet->tex_w > 0 ? (float)sheet->tex_w : 1.0f;
     th = sheet->tex_h > 0 ? (float)sheet->tex_h : 1.0f;
-    *u0 = (float)(col * sheet->cell_w) / tw;
-    *v0 = (float)(row * sheet->cell_h) / th;
-    *u1 = (float)((col + 1) * sheet->cell_w) / tw;
-    *v1 = (float)((row + 1) * sheet->cell_h) / th;
+    /* Inset half a texel so filtering never samples the next cell or the black wrap border. */
+    *u0 = ((float)(col * sheet->cell_w) + 0.5f) / tw;
+    *v0 = ((float)(row * sheet->cell_h) + 0.5f) / th;
+    *u1 = ((float)((col + 1) * sheet->cell_w) - 0.5f) / tw;
+    *v1 = ((float)((row + 1) * sheet->cell_h) - 0.5f) / th;
 }
 
 void canvas_sheet_init(Sheet *sheet, unsigned tex, int tex_w, int tex_h, int cell_w, int cell_h)

@@ -11,7 +11,7 @@
 TOOLSET ?= mingw
 TAG ?=
 
-GAMES = wander bounce pacman plat vector crate
+GAMES = wander bounce pacman plat vector crate arpg
 ENGINE = canvas$(TAG).dll
 PLUGINS = $(addsuffix $(TAG).dll,$(GAMES))
 HOSTS = $(addsuffix $(TAG).exe,$(GAMES)) canvas$(TAG).exe
@@ -19,6 +19,7 @@ HOST_SRC = src/canvas_host.c
 HOST_DEFS = -DCANVAS_TAG=\"$(TAG)\"
 ENGINE_LIB = canvas$(TAG)
 TOOLSET_STAMP = .hot/toolset-$(TOOLSET)$(TAG)
+ARPG_SRC = games/arpg.c games/crypt.c games/crypt_tune.c rpg/rpg.c rpg/dungeon.c rpg/world.c rpg/loot.c
 
 # Must be set before any rule: the stamp recipe used to be first, so
 # `make -f Makefile.win32` only touched .hot/toolset-* and built nothing.
@@ -40,7 +41,7 @@ CL = sh src/msvc-cl.sh
 DEVNUL = /dev/null
 endif
 
-CLFLAGS = -nologo -O2 -W3 -Iinclude -Isrc -D_CRT_SECURE_NO_WARNINGS
+CLFLAGS = -nologo -O2 -W3 -Iinclude -Isrc -I. -D_CRT_SECURE_NO_WARNINGS
 WINLIBS = opengl32.lib gdi32.lib user32.lib winmm.lib
 MSVC_GUI = -link -SUBSYSTEM:WINDOWS -ENTRY:mainCRTStartup
 
@@ -79,6 +80,9 @@ vector$(TAG).exe: $(HOST_SRC) $(ENGINE)
 crate$(TAG).exe: $(HOST_SRC) $(ENGINE)
 	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"crate\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
+arpg$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"arpg\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
+
 wander$(TAG).dll: games/wander.c $(ENGINE) include/canvas.h
 	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/wander.c -Fewander$(TAG).dll -link $(ENGINE_LIB).lib
 
@@ -97,6 +101,9 @@ vector$(TAG).dll: games/vector.c $(ENGINE) include/canvas.h
 crate$(TAG).dll: games/crate.c $(ENGINE) include/canvas.h
 	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/crate.c -Fecrate$(TAG).dll -link $(ENGINE_LIB).lib
 
+arpg$(TAG).dll: $(ARPG_SRC) $(ENGINE) include/canvas.h rpg/rpg.h rpg/dungeon.h rpg/world.h rpg/loot.h games/crypt.h games/crypt_tune.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD $(ARPG_SRC) -Fearpg$(TAG).dll -link $(ENGINE_LIB).lib
+
 else
 
 ifeq ($(OS),Windows_NT)
@@ -106,7 +113,7 @@ MINGW_CC ?= sh src/mingw-cc.sh
 else
 MINGW_CC ?= x86_64-w64-mingw32-gcc
 endif
-CFLAGS = -std=c11 -Wall -Wextra -O2 -Iinclude -Isrc
+CFLAGS = -std=c11 -Wall -Wextra -O2 -Iinclude -Isrc -I.
 LIBS = -lopengl32 -lgdi32 -luser32 -lwinmm
 MINGW_GUI = -mwindows
 
@@ -157,6 +164,9 @@ vector$(TAG).exe: $(HOST_SRC) $(ENGINE)
 crate$(TAG).exe: $(HOST_SRC) $(ENGINE)
 	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"crate\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
+arpg$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"arpg\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
+
 wander$(TAG).dll: games/wander.c $(ENGINE)
 	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/wander.c -L. -l$(ENGINE_LIB)
 
@@ -175,6 +185,9 @@ vector$(TAG).dll: games/vector.c $(ENGINE)
 crate$(TAG).dll: games/crate.c $(ENGINE)
 	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/crate.c -L. -l$(ENGINE_LIB)
 
+arpg$(TAG).dll: $(ARPG_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ $(ARPG_SRC) -L. -l$(ENGINE_LIB)
+
 endif
 
 clean:
@@ -185,6 +198,6 @@ clean:
 		$(addsuffix -msvc.exe,$(GAMES)) canvas-msvc.exe \
 		src/*.win32.o src/*.win32-*.o
 	rm -f *.dll libcanvas*.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
-	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj
+	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj rpg/*.obj
 	rm -f nul
 	rm -rf .hot

@@ -1,0 +1,6 @@
+rpg/rpg.c
+rpg/dungeon.c
+rpg/world.c
+rpg/loot.c
+games/crypt.c
+games/crypt_tune.c

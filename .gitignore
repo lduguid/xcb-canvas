@@ -4,6 +4,7 @@ pacman
 plat
 vector
 crate
+arpg
 canvas
 *.o
 *.exe

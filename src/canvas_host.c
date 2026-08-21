@@ -132,6 +132,45 @@ static int file_exists(const char *path)
 #endif
 }
 
+/* Extra translation units from games/<name>.files (one path per line). */
+static void extra_src(const char *name, char *out, size_t cap)
+{
+    char path[256], line[256];
+    FILE *f;
+    size_t n = 0;
+
+    out[0] = 0;
+    snprintf(path, sizeof(path), "games/%s.files", name);
+    f = fopen(path, "r");
+    if (!f)
+        return;
+    while (fgets(line, sizeof(line), f)) {
+        char *s = line;
+        size_t len;
+        while (*s == ' ' || *s == '\t')
+            s++;
+        len = strlen(s);
+        while (len && (s[len - 1] == '\n' || s[len - 1] == '\r' || s[len - 1] == ' ' || s[len - 1] == '\t'))
+            s[--len] = 0;
+        if (!len || s[0] == '#')
+            continue;
+        if (n + len + 2 >= cap)
+            break;
+        n += (size_t)snprintf(out + n, cap - n, " %s", s);
+    }
+    fclose(f);
+}
+
+#ifdef _WIN32
+static void slash_win(char *s)
+{
+    for (; *s; s++) {
+        if (*s == '/')
+            *s = '\\';
+    }
+}
+#endif
+
 static void tagged_name(char *out, size_t n, const char *stem, const char *ext)
 {
     snprintf(out, n, "%s%s%s", stem, CANVAS_TAG, ext);
@@ -567,11 +606,13 @@ static const char *find_cc(void)
 static int rebuild_msvc(const char *name)
 {
     FILE *bat;
-    char plugin[128], engine_dll[128], engine_lib[128];
+    char plugin[128], engine_dll[128], engine_lib[128], extra[1024];
 
     tagged_name(plugin, sizeof(plugin), name, "");
     tagged_name(engine_dll, sizeof(engine_dll), "canvas", ".dll");
     tagged_name(engine_lib, sizeof(engine_lib), "canvas", ".lib");
+    extra_src(name, extra, sizeof(extra));
+    slash_win(extra);
 
     if (!file_exists("canvas.def")) {
         fprintf(stderr, "hot-reload: missing canvas.def (needed to link MSVC plugins)\n");
@@ -594,11 +635,11 @@ static int rebuild_msvc(const char *name)
             "lib /nologo /def:canvas.def /machine:x64 /out:%s\n"
             "if errorlevel 1 exit /b 1\n"
             "cl /nologo /O2 /W3 /DCANVAS_PLUGIN /D_CRT_SECURE_NO_WARNINGS "
-            "/Iinclude /Isrc /LD /Fe:%s.dll /Fo.hot\\%s.obj games\\%s.c "
+            "/Iinclude /Isrc /I. /LD /Fe:%s.dll /Fo.hot\\ games\\%s.c%s "
             "/link /INCREMENTAL:NO /IMPLIB:.hot\\%s.lib %s\n",
-            vcvars_path, engine_lib, plugin, name, name, name, engine_lib);
+            vcvars_path, engine_lib, plugin, name, extra, name, engine_lib);
     fclose(bat);
-    fprintf(stderr, "hot-reload: msvc cl /LD games\\%s.c -> %s.dll\n", name, plugin);
+    fprintf(stderr, "hot-reload: msvc cl /LD games\\%s.c%s -> %s.dll\n", name, extra, plugin);
     return run_hidden(".hot\\rebuild.bat");
 }
 #endif
@@ -606,9 +647,10 @@ static int rebuild_msvc(const char *name)
 static int rebuild(const char *name)
 {
     const char *cc = find_cc();
-    char cmd[768];
+    char cmd[2048], extra[1024];
     int rc;
 
+    extra_src(name, extra, sizeof(extra));
     if (!cc) {
         fprintf(stderr,
 #ifdef _WIN32
@@ -637,25 +679,25 @@ static int rebuild(const char *name)
         fprintf(sh,
                 "#!/bin/bash\nset -e\ncd '%s'\n"
                 "x86_64-w64-mingw32-gcc -std=c11 -Wall -O2 -m64 -shared "
-                "-DCANVAS_PLUGIN -Iinclude -Isrc -o %s%s.dll games/%s.c -L. -lcanvas%s\n",
-                wsl_dir, name, CANVAS_TAG, name, CANVAS_TAG);
+                "-DCANVAS_PLUGIN -Iinclude -Isrc -I. -o %s%s.dll games/%s.c%s -L. -lcanvas%s\n",
+                wsl_dir, name, CANVAS_TAG, name, extra, CANVAS_TAG);
         fclose(sh);
         snprintf(cmd, sizeof(cmd), "wsl -e bash %s/.hot/rebuild.sh", wsl_dir);
         fprintf(stderr, "hot-reload: %s (%s)\n", cc, wsl_dir);
         rc = run_hidden(cmd);
     } else {
         snprintf(cmd, sizeof(cmd),
-                 "\"%s\" -std=c11 -Wall -O2 -m64 -shared -DCANVAS_PLUGIN -Iinclude -Isrc "
-                 "-o %s%s.dll games/%s.c -L. -lcanvas%s",
-                 cc, name, CANVAS_TAG, name, CANVAS_TAG);
+                 "\"%s\" -std=c11 -Wall -O2 -m64 -shared -DCANVAS_PLUGIN -Iinclude -Isrc -I. "
+                 "-o %s%s.dll games/%s.c%s -L. -lcanvas%s",
+                 cc, name, CANVAS_TAG, name, extra, CANVAS_TAG);
         fprintf(stderr, "hot-reload: %s\n", cmd);
         rc = run_hidden(cmd);
     }
 #else
     snprintf(cmd, sizeof(cmd),
-             "%s -std=c11 -Wall -O2 -shared -fPIC -DCANVAS_PLUGIN -Iinclude -Isrc "
-             "-o %s.so games/%s.c -lm",
-             cc, name, name);
+             "%s -std=c11 -Wall -O2 -shared -fPIC -DCANVAS_PLUGIN -Iinclude -Isrc -I. "
+             "-o %s.so games/%s.c%s -lm",
+             cc, name, name, extra);
     fprintf(stderr, "hot-reload: %s\n", cmd);
     rc = system(cmd);
 #endif

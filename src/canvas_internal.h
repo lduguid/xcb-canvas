@@ -3,6 +3,8 @@
 
 #include "canvas.h"
 
+#include <stdio.h>
+
 #define CANVAS_SND_RATE 22050
 #define CANVAS_SND_CLIPS 48
 #define CANVAS_SND_VOICES 16
@@ -44,8 +46,16 @@ struct Canvas {
     char hot_msg[160];
     float hot_msg_t;
     int hot_hud;
-    float frame_dt; /* raw seconds for last frame, before the gameplay cap */
+    float frame_dt;
     float fps;
+
+    unsigned seed;
+    FILE *log;
+    char log_obs[768];
+    float log_obs_t;
+    float lock_dt;
+    float sim_acc;
+    int replaying;
 };
 
 typedef int (*CanvasHotReloadFn)(void *userdata, Game *game);
@@ -72,5 +82,11 @@ void canvas_apply_camera(Canvas *c, float dt);
 void canvas_set_world_proj(const Canvas *c);
 void canvas_set_hud_proj(const Canvas *c);
 void canvas_plat_set_title(Canvas *c, const char *title);
+
+void canvas_session_begin(Canvas *c, const char *game_name);
+void canvas_session_tick(Canvas *c, const Game *g, void *state);
+void canvas_session_end(Canvas *c);
+void canvas_session_pump(Canvas *c, Game *g, void **state, float wall_dt);
+void canvas_session_overlay(Canvas *c);
 
 #endif

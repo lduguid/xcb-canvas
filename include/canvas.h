@@ -87,8 +87,11 @@ typedef struct Game {
     void (*update)(void *state, Canvas *c, float dt);
     void (*render)(void *state, Canvas *c);
     void (*shutdown)(void *state, Canvas *c);
-    /* Optional. Called after a successful F5 hot-reload with the old state. */
+    /* Optional. After F5, old heap is still live. */
     void (*hot_reload)(void *state, Canvas *c);
+    /* Optional. Write one JSON object of observable state into buf (no newline).
+     * Used for CANVAS_LOG playthrough captures. Must not change gameplay. */
+    void (*observe)(void *state, Canvas *c, char *buf, size_t n);
 } Game;
 
 typedef struct Sprite {
@@ -149,6 +152,17 @@ CANVAS_API void canvas_cam_zoom(Canvas *c, float zoom);
 CANVAS_API float canvas_cam_zoom_get(const Canvas *c);
 CANVAS_API void canvas_view(const Canvas *c, float *x, float *y, float *w, float *h);
 CANVAS_API void canvas_screen_to_world(const Canvas *c, float sx, float sy, float *wx, float *wy);
+CANVAS_API void canvas_world_to_screen(const Canvas *c, float wx, float wy, float *sx, float *sy);
+
+/* Seed from CANVAS_SEED, or from CANVAS_REPLAY's session line, or 0 if the game should pick. */
+CANVAS_API unsigned canvas_seed(const Canvas *c);
+/* 1 while playing back CANVAS_REPLAY (same engine, injected input). */
+CANVAS_API int canvas_replaying(const Canvas *c);
+/* No-op unless CANVAS_LOG is set. One JSONL event: kind + formatted msg. */
+CANVAS_API void canvas_trace(Canvas *c, const char *kind, const char *fmt, ...);
+CANVAS_API void canvas_inject_key(Canvas *c, CanvasKey key, int down);
+CANVAS_API void canvas_inject_mouse(Canvas *c, int x, int y);
+CANVAS_API void canvas_inject_click(Canvas *c, int button);
 
 CANVAS_API void canvas_clear(Canvas *c, float r, float g, float b);
 CANVAS_API void canvas_fill_rect(Canvas *c, float x, float y, float w, float h, float r, float g, float b, float a);
