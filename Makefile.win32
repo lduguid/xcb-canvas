@@ -1,9 +1,10 @@
 # Windows binaries.
 #   make -f Makefile.win32                 MinGW-w64 (default)
 #   make -f Makefile.win32 TOOLSET=msvc    Visual Studio cl (vcvars64)
+#   TAG=-mingw|-w64|-msvc  tags .exe and .dll so toolchains do not clobber
 #
-# From WSL, MinGW uses the cross compiler. MSVC still runs Windows cl via cmd.
-# Override the VS env script with VCVARS=C:\path\to\vcvars64.bat if needed.
+# From WSL, MinGW uses the cross compiler unless MINGW_HOST=windows.
+# MSVC runs Windows cl via src/msvc-cl.sh. Override VCVARS if needed.
 #
 # GNU make always defines CC=cc, so do not use CC ?= mingw-gcc here.
 
@@ -11,9 +12,12 @@ TOOLSET ?= mingw
 TAG ?=
 
 GAMES = wander bounce pacman plat vector crate
-PLUGINS = $(addsuffix .dll,$(GAMES))
+ENGINE = canvas$(TAG).dll
+PLUGINS = $(addsuffix $(TAG).dll,$(GAMES))
 HOSTS = $(addsuffix $(TAG).exe,$(GAMES)) canvas$(TAG).exe
 HOST_SRC = src/canvas_host.c
+HOST_DEFS = -DCANVAS_TAG=\"$(TAG)\"
+ENGINE_LIB = canvas$(TAG)
 TOOLSET_STAMP = .hot/toolset-$(TOOLSET)$(TAG)
 
 # Must be set before any rule: the stamp recipe used to be first, so
@@ -40,63 +44,65 @@ CLFLAGS = -nologo -O2 -W3 -Iinclude -Isrc -D_CRT_SECURE_NO_WARNINGS
 WINLIBS = opengl32.lib gdi32.lib user32.lib winmm.lib
 MSVC_GUI = -link -SUBSYSTEM:WINDOWS -ENTRY:mainCRTStartup
 
-all: check-msvc canvas.dll $(HOSTS) $(PLUGINS)
+all: check-msvc $(ENGINE) $(HOSTS) $(PLUGINS)
 	@echo "win32 TOOLSET=msvc  (cl)"
 
 check-msvc:
-	@$(CL) -nologo -Bv >$(DEVNUL) 2>&1 || { \
+	@$(CL) -nologo -help >$(DEVNUL) 2>&1 || { \
 	  echo "Need Visual Studio C++ x64 toolset (cl + vcvars64)."; \
 	  echo "  make -f Makefile.win32 TOOLSET=msvc"; \
 	  echo "  Or set VCVARS to vcvars64.bat"; \
 	  exit 1; }
 
-canvas.dll canvas.lib: $(TOOLSET_STAMP) src/canvas_core.c src/canvas_win32.c src/canvas_internal.h include/canvas.h src/stb_image.h canvas.def
+$(ENGINE) $(ENGINE_LIB).lib: $(TOOLSET_STAMP) src/canvas_core.c src/canvas_win32.c src/canvas_internal.h include/canvas.h src/stb_image.h canvas.def
 	$(CL) $(CLFLAGS) -DCANVAS_BUILD_DLL -LD src/canvas_core.c src/canvas_win32.c \
-		-Fecanvas.dll -link -DEF:canvas.def $(WINLIBS)
+		-Fe$(ENGINE) -link -DEF:canvas.def $(WINLIBS)
 
-canvas$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+canvas$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-wander$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"wander\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+wander$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"wander\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-bounce$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"bounce\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+bounce$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"bounce\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-pacman$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"pacman\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+pacman$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"pacman\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-plat$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"plat\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+plat$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"plat\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-vector$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"vector\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+vector$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"vector\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-crate$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(CL) $(CLFLAGS) -DCANVAS_LAUNCH=\"crate\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) canvas.lib
+crate$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(CL) $(CLFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"crate\" $(HOST_SRC) -Fe$@ $(MSVC_GUI) $(ENGINE_LIB).lib
 
-wander.dll: games/wander.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/wander.c -Fewander.dll -link canvas.lib
+wander$(TAG).dll: games/wander.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/wander.c -Fewander$(TAG).dll -link $(ENGINE_LIB).lib
 
-bounce.dll: games/bounce.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/bounce.c -Febounce.dll -link canvas.lib
+bounce$(TAG).dll: games/bounce.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/bounce.c -Febounce$(TAG).dll -link $(ENGINE_LIB).lib
 
-pacman.dll: games/pacman.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/pacman.c -Fepacman.dll -link canvas.lib
+pacman$(TAG).dll: games/pacman.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/pacman.c -Fepacman$(TAG).dll -link $(ENGINE_LIB).lib
 
-plat.dll: games/plat.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/plat.c -Feplat.dll -link canvas.lib
+plat$(TAG).dll: games/plat.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/plat.c -Feplat$(TAG).dll -link $(ENGINE_LIB).lib
 
-vector.dll: games/vector.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/vector.c -Fevector.dll -link canvas.lib
+vector$(TAG).dll: games/vector.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/vector.c -Fevector$(TAG).dll -link $(ENGINE_LIB).lib
 
-crate.dll: games/crate.c canvas.dll include/canvas.h
-	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/crate.c -Fecrate.dll -link canvas.lib
+crate$(TAG).dll: games/crate.c $(ENGINE) include/canvas.h
+	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/crate.c -Fecrate$(TAG).dll -link $(ENGINE_LIB).lib
 
 else
 
 ifeq ($(OS),Windows_NT)
 MINGW_CC ?= gcc
+else ifeq ($(MINGW_HOST),windows)
+MINGW_CC ?= sh src/mingw-cc.sh
 else
 MINGW_CC ?= x86_64-w64-mingw32-gcc
 endif
@@ -104,80 +110,81 @@ CFLAGS = -std=c11 -Wall -Wextra -O2 -Iinclude -Isrc
 LIBS = -lopengl32 -lgdi32 -luser32 -lwinmm
 MINGW_GUI = -mwindows
 
-CORE = src/canvas_core.win32.o
-PLAT = src/canvas_win32.win32.o
+CORE = src/canvas_core.win32$(TAG).o
+PLAT = src/canvas_win32.win32$(TAG).o
 
-all: check-mingw canvas.dll $(HOSTS) $(PLUGINS)
+all: check-mingw $(ENGINE) $(HOSTS) $(PLUGINS)
 	@echo "win32 TOOLSET=mingw  ($(MINGW_CC))"
 
 check-mingw:
-	@command -v $(MINGW_CC) >/dev/null || { \
+	@$(MINGW_CC) -dumpmachine >/dev/null 2>&1 || { \
 	  echo "Need MinGW-w64. On Debian/Ubuntu/WSL:"; \
 	  echo "  sudo apt install gcc-mingw-w64-x86-64"; \
 	  echo "Then re-run: make -f Makefile.win32"; \
 	  echo "Or: make -f Makefile.win32 TOOLSET=msvc"; \
 	  exit 1; }
 
-src/canvas_core.win32.o: src/canvas_core.c src/canvas_internal.h include/canvas.h src/stb_image.h
+src/canvas_core.win32$(TAG).o: src/canvas_core.c src/canvas_internal.h include/canvas.h src/stb_image.h
 	$(MINGW_CC) $(CFLAGS) -DCANVAS_BUILD_DLL -c -o $@ src/canvas_core.c
 
-src/canvas_win32.win32.o: src/canvas_win32.c src/canvas_internal.h include/canvas.h
+src/canvas_win32.win32$(TAG).o: src/canvas_win32.c src/canvas_internal.h include/canvas.h
 	$(MINGW_CC) $(CFLAGS) -DCANVAS_BUILD_DLL -c -o $@ src/canvas_win32.c
 
 # Engine lives in canvas.dll so plat.exe and plat.dll share one copy of
 # canvas_* (a game DLL cannot import those symbols from an .exe).
-canvas.dll: $(TOOLSET_STAMP) $(CORE) $(PLAT)
+$(ENGINE): $(TOOLSET_STAMP) $(CORE) $(PLAT)
 	$(MINGW_CC) -shared -o $@ $(CORE) $(PLAT) $(LIBS) \
-		-Wl,--export-all-symbols,--out-implib,libcanvas.a
+		-Wl,--export-all-symbols,--out-implib,lib$(ENGINE_LIB).a
 
-canvas$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+canvas$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-wander$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"wander\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+wander$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"wander\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-bounce$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"bounce\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+bounce$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"bounce\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-pacman$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"pacman\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+pacman$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"pacman\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-plat$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"plat\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+plat$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"plat\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-vector$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"vector\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+vector$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"vector\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-crate$(TAG).exe: $(HOST_SRC) canvas.dll
-	$(MINGW_CC) $(CFLAGS) -DCANVAS_LAUNCH=\"crate\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -lcanvas
+crate$(TAG).exe: $(HOST_SRC) $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) $(HOST_DEFS) -DCANVAS_LAUNCH=\"crate\" -o $@ $(HOST_SRC) $(MINGW_GUI) -L. -l$(ENGINE_LIB)
 
-wander.dll: games/wander.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/wander.c -L. -lcanvas
+wander$(TAG).dll: games/wander.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/wander.c -L. -l$(ENGINE_LIB)
 
-bounce.dll: games/bounce.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/bounce.c -L. -lcanvas
+bounce$(TAG).dll: games/bounce.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/bounce.c -L. -l$(ENGINE_LIB)
 
-pacman.dll: games/pacman.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/pacman.c -L. -lcanvas
+pacman$(TAG).dll: games/pacman.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/pacman.c -L. -l$(ENGINE_LIB)
 
-plat.dll: games/plat.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/plat.c -L. -lcanvas
+plat$(TAG).dll: games/plat.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/plat.c -L. -l$(ENGINE_LIB)
 
-vector.dll: games/vector.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/vector.c -L. -lcanvas
+vector$(TAG).dll: games/vector.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/vector.c -L. -l$(ENGINE_LIB)
 
-crate.dll: games/crate.c canvas.dll
-	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/crate.c -L. -lcanvas
+crate$(TAG).dll: games/crate.c $(ENGINE)
+	$(MINGW_CC) $(CFLAGS) -shared -DCANVAS_PLUGIN -o $@ games/crate.c -L. -l$(ENGINE_LIB)
 
 endif
 
 clean:
-	rm -f $(HOSTS) $(addsuffix .exe,$(GAMES)) canvas.exe \
+	rm -f $(HOSTS) $(PLUGINS) $(ENGINE) \
+		$(addsuffix .exe,$(GAMES)) canvas.exe \
 		$(addsuffix -mingw.exe,$(GAMES)) canvas-mingw.exe \
 		$(addsuffix -w64.exe,$(GAMES)) canvas-w64.exe \
 		$(addsuffix -msvc.exe,$(GAMES)) canvas-msvc.exe \
-		src/*.win32.o
-	rm -f *.dll libcanvas.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
+		src/*.win32.o src/*.win32-*.o
+	rm -f *.dll libcanvas*.a libcanvas_host.a canvas.lib canvas.exp *.lib *.exp
 	rm -f *.obj *.pdb *.ilk src/*.obj games/*.obj
 	rm -f nul
 	rm -rf .hot

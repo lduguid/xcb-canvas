@@ -9,10 +9,11 @@ canvas
 *.exe
 *.so
 *.dll
-libcanvas.a
+libcanvas*.a
 libcanvas_host.a
 src/*.o
 src/*.win32.o
+src/*.win32-*.o
 .hot/
 
 # MSVC (TOOLSET=msvc / cl hot-reload)

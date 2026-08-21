@@ -26,6 +26,10 @@
 #define HMODULE void *
 #endif
 
+#ifndef CANVAS_TAG
+#define CANVAS_TAG ""
+#endif
+
 typedef struct {
     char name[64];
     char built[256];
@@ -127,6 +131,44 @@ static int file_exists(const char *path)
     return access(path, R_OK) == 0;
 #endif
 }
+
+static void tagged_name(char *out, size_t n, const char *stem, const char *ext)
+{
+    snprintf(out, n, "%s%s%s", stem, CANVAS_TAG, ext);
+}
+
+#ifdef _WIN32
+/* system() always flashes a console under -mwindows. Keep probes/rebuilds hidden. */
+static int run_hidden(const char *cmd)
+{
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char *buf;
+    size_t n;
+    DWORD code = 1;
+
+    n = strlen(cmd) + 16;
+    buf = (char *)malloc(n);
+    if (!buf)
+        return 1;
+    snprintf(buf, n, "cmd.exe /c %s", cmd);
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    if (!CreateProcessA(NULL, buf, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        free(buf);
+        return 1;
+    }
+    free(buf);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return code == 0 ? 0 : 1;
+}
+#endif
 
 #ifdef _WIN32
 #define CC_MAX 32
@@ -308,7 +350,7 @@ static int cc_is_mingw64(const char *cc)
 
     CreateDirectoryA(".hot", NULL);
     snprintf(cmd, sizeof(cmd), "\"%s\" -dumpmachine > .hot\\_cc_mach.txt 2>nul", cc);
-    if (system(cmd) != 0)
+    if (run_hidden(cmd) != 0)
         return 0;
     f = fopen(".hot\\_cc_mach.txt", "r");
     if (!f)
@@ -330,7 +372,7 @@ static int cc_is_mingw64(const char *cc)
     snprintf(cmd, sizeof(cmd),
              "\"%s\" -std=c11 -m64 -shared -o .hot\\_cc_probe.dll .hot\\_cc_probe.c >nul 2>nul",
              cc);
-    return system(cmd) == 0;
+    return run_hidden(cmd) == 0;
 }
 
 static int find_mingw(const char *forced)
@@ -419,7 +461,7 @@ static int find_vcvars(void)
     snprintf(cmd, sizeof(cmd),
              "\"%s\" -latest -products * -find **\\vcvars64.bat > .hot\\_vcvars.txt 2>nul",
              vswhere);
-    if (system(cmd) != 0)
+    if (run_hidden(cmd) != 0)
         return 0;
     f = fopen(".hot\\_vcvars.txt", "r");
     if (!f)
@@ -439,7 +481,7 @@ static int find_vcvars(void)
 static int find_wsl_mingw(void)
 {
     char cwd[MAX_PATH];
-    if (system("wsl -e x86_64-w64-mingw32-gcc -dumpmachine >nul 2>nul") != 0)
+    if (run_hidden("wsl -e x86_64-w64-mingw32-gcc -dumpmachine >nul 2>nul") != 0)
         return 0;
     if (!GetCurrentDirectoryA(MAX_PATH, cwd) || !win_to_wsl(cwd, wsl_dir, sizeof(wsl_dir)))
         return 0;
@@ -468,7 +510,7 @@ static int select_kind(CcKind want, const char *forced_path)
         if (want == CC_KIND_MSVC)
             return 0;
     }
-    if (want == CC_KIND_WSL || want == CC_KIND_NONE) {
+    if (want == CC_KIND_WSL) {
         if (find_wsl_mingw()) {
             cc_kind = CC_KIND_WSL;
             snprintf(cc_label, sizeof(cc_label), "F1 hide  wsl-mingw");
@@ -525,13 +567,18 @@ static const char *find_cc(void)
 static int rebuild_msvc(const char *name)
 {
     FILE *bat;
+    char plugin[128], engine_dll[128], engine_lib[128];
+
+    tagged_name(plugin, sizeof(plugin), name, "");
+    tagged_name(engine_dll, sizeof(engine_dll), "canvas", ".dll");
+    tagged_name(engine_lib, sizeof(engine_lib), "canvas", ".lib");
 
     if (!file_exists("canvas.def")) {
         fprintf(stderr, "hot-reload: missing canvas.def (needed to link MSVC plugins)\n");
         return -1;
     }
-    if (!file_exists("canvas.dll")) {
-        fprintf(stderr, "hot-reload: missing canvas.dll\n");
+    if (!file_exists(engine_dll)) {
+        fprintf(stderr, "hot-reload: missing %s\n", engine_dll);
         return -1;
     }
     CreateDirectoryA(".hot", NULL);
@@ -544,15 +591,15 @@ static int rebuild_msvc(const char *name)
             "@echo off\n"
             "call \"%s\" >nul\n"
             "if errorlevel 1 exit /b 1\n"
-            "lib /nologo /def:canvas.def /machine:x64 /out:canvas.lib\n"
+            "lib /nologo /def:canvas.def /machine:x64 /out:%s\n"
             "if errorlevel 1 exit /b 1\n"
             "cl /nologo /O2 /W3 /DCANVAS_PLUGIN /D_CRT_SECURE_NO_WARNINGS "
             "/Iinclude /Isrc /LD /Fe:%s.dll /Fo.hot\\%s.obj games\\%s.c "
-            "/link /INCREMENTAL:NO /IMPLIB:.hot\\%s.lib canvas.lib\n",
-            vcvars_path, name, name, name, name);
+            "/link /INCREMENTAL:NO /IMPLIB:.hot\\%s.lib %s\n",
+            vcvars_path, engine_lib, plugin, name, name, name, engine_lib);
     fclose(bat);
-    fprintf(stderr, "hot-reload: msvc cl /LD games\\%s.c -> %s.dll\n", name, name);
-    return system(".hot\\rebuild.bat");
+    fprintf(stderr, "hot-reload: msvc cl /LD games\\%s.c -> %s.dll\n", name, plugin);
+    return run_hidden(".hot\\rebuild.bat");
 }
 #endif
 
@@ -590,19 +637,19 @@ static int rebuild(const char *name)
         fprintf(sh,
                 "#!/bin/bash\nset -e\ncd '%s'\n"
                 "x86_64-w64-mingw32-gcc -std=c11 -Wall -O2 -m64 -shared "
-                "-DCANVAS_PLUGIN -Iinclude -Isrc -o %s.dll games/%s.c -L. -lcanvas\n",
-                wsl_dir, name, name);
+                "-DCANVAS_PLUGIN -Iinclude -Isrc -o %s%s.dll games/%s.c -L. -lcanvas%s\n",
+                wsl_dir, name, CANVAS_TAG, name, CANVAS_TAG);
         fclose(sh);
         snprintf(cmd, sizeof(cmd), "wsl -e bash %s/.hot/rebuild.sh", wsl_dir);
         fprintf(stderr, "hot-reload: %s (%s)\n", cc, wsl_dir);
-        rc = system(cmd);
+        rc = run_hidden(cmd);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "\"%s\" -std=c11 -Wall -O2 -m64 -shared -DCANVAS_PLUGIN -Iinclude -Isrc "
-                 "-o %s.dll games/%s.c -L. -lcanvas",
-                 cc, name, name);
+                 "-o %s%s.dll games/%s.c -L. -lcanvas%s",
+                 cc, name, CANVAS_TAG, name, CANVAS_TAG);
         fprintf(stderr, "hot-reload: %s\n", cmd);
-        rc = system(cmd);
+        rc = run_hidden(cmd);
     }
 #else
     snprintf(cmd, sizeof(cmd),
@@ -646,7 +693,8 @@ static int load_copy(HotHost *h, Game *out)
                        NULL, err, 0, msg, sizeof(msg), NULL);
         fprintf(stderr, "hot-reload: LoadLibrary %s failed (%lu) %s\n",
                 hot, (unsigned long)err, msg);
-        fprintf(stderr, "  %s.dll must sit next to canvas.dll and the .exe\n", h->name);
+        fprintf(stderr, "  %s.dll must sit next to canvas%s.dll and the .exe\n",
+                h->name, CANVAS_TAG);
 #else
         fprintf(stderr, "hot-reload: dlopen: %s\n", dlerror());
 #endif
@@ -691,7 +739,7 @@ int canvas_host_run(const char *name)
         return 1;
     }
     snprintf(host.name, sizeof(host.name), "%s", name);
-    snprintf(host.built, sizeof(host.built), "%s%s", name, LIB_EXT);
+    tagged_name(host.built, sizeof(host.built), name, LIB_EXT);
 
     fprintf(stderr, "canvas: loading %s  (F5 reload, F6 reload+reset)\n", name);
 #ifdef _WIN32

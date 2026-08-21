@@ -1,4 +1,3 @@
-LIBRARY canvas
 EXPORTS
 canvas_run
 canvas_width
