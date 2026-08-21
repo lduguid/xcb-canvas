@@ -2,6 +2,8 @@
 
 You are writing a 2D game. The host owns the window, OpenGL, input, and audio. You write **one C file**, include only `include/canvas.h`, and export a `Game` table. The same file runs on Linux (X11) and Windows.
 
+This is not an emulator of any particular machine — just a small subset of 2D graphics so games share one platform API.
+
 Do not include X11, Win32, OpenGL, or anything under `src/`.
 
 Shipped games: `wander`, `bounce`, `pacman`, `plat`, `vector`, `crate`. Steal from those after the catch sketch below.
