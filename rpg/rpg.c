@@ -129,21 +129,40 @@ static void apply_item(RpgStats *s, const RpgItem *it)
         s->v[i] += it->mods[i];
 }
 
-void rpg_recalc(const RpgStats *base, const RpgInv *inv, RpgStats *live)
+static void apply_mods_rank(RpgStats *s, const int *mods, int rank)
 {
-    int i, hp, mp, hpmax, mpmax;
+    int i, n;
 
-    if (!live || !base)
+    if (!s || !mods || rank <= 0 || !R)
         return;
+    n = R->stat_n;
+    if (n > RPG_STAT_MAX)
+        n = RPG_STAT_MAX;
+    for (i = 0; i < n; i++)
+        s->v[i] += mods[i] * rank;
+}
+
+static void live_from_base(RpgStats *live, const RpgStats *base)
+{
     *live = *base;
     if (R && R->reset_derived)
         R->reset_derived(live);
-    if (inv) {
-        for (i = 0; i < rpg_slot_n(); i++)
-            apply_item(live, &inv->wear[i]);
-    }
-    if (R && R->derive)
-        R->derive(live);
+}
+
+static void apply_gear(RpgStats *live, const RpgInv *inv)
+{
+    int i;
+
+    if (!inv)
+        return;
+    for (i = 0; i < rpg_slot_n(); i++)
+        apply_item(live, &inv->wear[i]);
+}
+
+static void clamp_vitals(RpgStats *live, const RpgStats *base)
+{
+    int hp, mp, hpmax, mpmax;
+
     if (!R)
         return;
     if (R->hp >= 0 && R->hp_max >= 0) {
@@ -166,11 +185,56 @@ void rpg_recalc(const RpgStats *base, const RpgInv *inv, RpgStats *live)
     }
 }
 
+static void finish_live(RpgStats *live, const RpgStats *base)
+{
+    if (R && R->derive)
+        R->derive(live);
+    clamp_vitals(live, base);
+}
+
+static const RpgSkillInfo *find_skill(int id);
+static const RpgTalentInfo *find_talent(int id);
+
+static void apply_build_mods(RpgStats *live, const RpgHero *h)
+{
+    int i;
+    const RpgSkillInfo *s;
+    const RpgTalentInfo *t;
+
+    if (!h)
+        return;
+    for (i = 0; i < h->build.skills.n; i++) {
+        s = find_skill(h->build.skills.v[i].id);
+        if (s)
+            apply_mods_rank(live, s->mods, h->build.skills.v[i].rank);
+    }
+    for (i = 0; i < h->build.talents.n; i++) {
+        t = find_talent(h->build.talents.v[i].id);
+        if (t)
+            apply_mods_rank(live, t->mods, h->build.talents.v[i].rank);
+    }
+}
+
+void rpg_recalc(const RpgStats *base, const RpgInv *inv, RpgStats *live)
+{
+    if (!live || !base)
+        return;
+    live_from_base(live, base);
+    apply_gear(live, inv);
+    finish_live(live, base);
+}
+
 void rpg_hero_refresh(RpgHero *h)
 {
     if (!h)
         return;
-    rpg_recalc(&h->base, &h->inv, &h->live);
+    live_from_base(&h->live, &h->base);
+    apply_gear(&h->live, &h->inv);
+    apply_build_mods(&h->live, h);
+    finish_live(&h->live, &h->base);
+    if (R && R->apply_build)
+        R->apply_build(&h->live, h);
+    clamp_vitals(&h->live, &h->base);
 }
 
 void rpg_hero_init(RpgHero *h)
@@ -353,6 +417,33 @@ int rpg_inv_move(RpgInv *from, int grid_i, RpgInv *to)
     return 0;
 }
 
+int rpg_inv_find(const RpgInv *inv, int kind)
+{
+    int i, n = rpg_inv_n();
+
+    if (!inv || kind == RPG_NONE)
+        return -1;
+    for (i = 0; i < n; i++) {
+        if (inv->grid[i].kind == kind)
+            return i;
+    }
+    return -1;
+}
+
+int rpg_inv_count(const RpgInv *inv, int kind)
+{
+    int i, n = rpg_inv_n(), t = 0;
+
+    if (!inv || kind == RPG_NONE)
+        return 0;
+    for (i = 0; i < n; i++) {
+        if (inv->grid[i].kind != kind)
+            continue;
+        t += inv->grid[i].stack > 0 ? inv->grid[i].stack : 1;
+    }
+    return t;
+}
+
 int rpg_equip(RpgInv *inv, int grid_i)
 {
     RpgItem hold, worn;
@@ -395,6 +486,497 @@ int rpg_use(RpgHero *h, RpgItem *it)
     if (n)
         rpg_hero_sync(h);
     return n;
+}
+
+void rpg_bar_clear(RpgBar *b)
+{
+    if (b)
+        memset(b, 0, sizeof(*b));
+}
+
+static int bar_ok(int slot)
+{
+    return slot >= 0 && slot < RPG_BAR_N;
+}
+
+void rpg_bar_bind_item(RpgBar *b, int slot, int kind)
+{
+    if (!b || !bar_ok(slot) || kind == RPG_NONE)
+        return;
+    b->slot[slot].type = RPG_BAR_ITEM;
+    b->slot[slot].id = kind;
+}
+
+void rpg_bar_bind_skill(RpgBar *b, int slot, int skill)
+{
+    if (!b || !bar_ok(slot) || skill == 0)
+        return;
+    b->slot[slot].type = RPG_BAR_SKILL;
+    b->slot[slot].id = skill;
+}
+
+void rpg_bar_put(RpgBar *b, int slot, int type, int id)
+{
+    if (!b || !bar_ok(slot))
+        return;
+    if (type == RPG_BAR_ITEM)
+        rpg_bar_bind_item(b, slot, id);
+    else if (type == RPG_BAR_SKILL)
+        rpg_bar_bind_skill(b, slot, id);
+    else
+        rpg_bar_unbind(b, slot);
+}
+
+void rpg_book_clear(RpgBook *b)
+{
+    if (b)
+        memset(b, 0, sizeof(*b));
+}
+
+int rpg_book_n(const RpgBook *b)
+{
+    return b ? b->n : 0;
+}
+
+int rpg_book_id(const RpgBook *b, int i)
+{
+    if (!b || i < 0 || i >= b->n)
+        return 0;
+    return b->v[i].id;
+}
+
+int rpg_book_rank_at(const RpgBook *b, int i)
+{
+    if (!b || i < 0 || i >= b->n)
+        return 0;
+    return b->v[i].rank;
+}
+
+int rpg_book_get(const RpgBook *b, int id)
+{
+    int i;
+
+    if (!b || id == 0)
+        return 0;
+    for (i = 0; i < b->n; i++) {
+        if (b->v[i].id == id)
+            return b->v[i].rank;
+    }
+    return 0;
+}
+
+int rpg_book_has(const RpgBook *b, int id)
+{
+    return rpg_book_get(b, id) > 0;
+}
+
+int rpg_book_forget(RpgBook *b, int id)
+{
+    int i, j;
+
+    if (!b || id == 0)
+        return -1;
+    for (i = 0; i < b->n; i++) {
+        if (b->v[i].id != id)
+            continue;
+        for (j = i; j < b->n - 1; j++)
+            b->v[j] = b->v[j + 1];
+        memset(&b->v[--b->n], 0, sizeof(b->v[0]));
+        return 0;
+    }
+    return -1;
+}
+
+int rpg_book_set(RpgBook *b, int id, int rank)
+{
+    int i;
+
+    if (!b || id == 0)
+        return -1;
+    if (rank <= 0)
+        return rpg_book_forget(b, id);
+    for (i = 0; i < b->n; i++) {
+        if (b->v[i].id == id) {
+            b->v[i].rank = rank;
+            return 0;
+        }
+    }
+    if (b->n >= RPG_BOOK_MAX)
+        return -1;
+    b->v[b->n].id = id;
+    b->v[b->n].rank = rank;
+    b->n++;
+    return 0;
+}
+
+int rpg_book_learn(RpgBook *b, int id)
+{
+    if (rpg_book_has(b, id))
+        return 0;
+    return rpg_book_set(b, id, 1);
+}
+
+static int class_allows(int have, int owner)
+{
+    return owner == 0 || owner == have;
+}
+
+static int rank_cap(int max_rank)
+{
+    return max_rank > 0 ? max_rank : 1;
+}
+
+static int talent_cost(const RpgTalentInfo *t)
+{
+    if (!t || t->cost <= 0)
+        return 1;
+    return t->cost;
+}
+
+static const RpgClassInfo *find_class(int id)
+{
+    int i;
+
+    if (!R || !R->classes || id == 0)
+        return NULL;
+    for (i = 0; i < R->class_n; i++) {
+        if (R->classes[i].id == id)
+            return &R->classes[i];
+    }
+    return NULL;
+}
+
+static const RpgSkillInfo *find_skill(int id)
+{
+    int i;
+
+    if (!R || !R->skills || id == 0)
+        return NULL;
+    for (i = 0; i < R->skill_n; i++) {
+        if (R->skills[i].id == id)
+            return &R->skills[i];
+    }
+    return NULL;
+}
+
+static const RpgTalentInfo *find_talent(int id)
+{
+    int i;
+
+    if (!R || !R->talents || id == 0)
+        return NULL;
+    for (i = 0; i < R->talent_n; i++) {
+        if (R->talents[i].id == id)
+            return &R->talents[i];
+    }
+    return NULL;
+}
+
+const RpgClassInfo *rpg_class_info(int id)
+{
+    return find_class(id);
+}
+
+const RpgSkillInfo *rpg_skill_info(int id)
+{
+    return find_skill(id);
+}
+
+const RpgTalentInfo *rpg_talent_info(int id)
+{
+    return find_talent(id);
+}
+
+static int hero_level(const RpgHero *h)
+{
+    if (!h || !R || R->level < 0)
+        return 0;
+    return rpg_get(&h->base, R->level);
+}
+
+static int prereq_rank(const RpgHero *h, int id)
+{
+    int r;
+
+    if (!h || id == 0)
+        return 0;
+    r = rpg_book_get(&h->build.talents, id);
+    if (r > 0)
+        return r;
+    return rpg_book_get(&h->build.skills, id);
+}
+
+static void bar_unbind_skill(RpgHero *h, int skill)
+{
+    int i;
+
+    if (!h)
+        return;
+    for (i = 0; i < RPG_BAR_N; i++) {
+        if (h->bar.slot[i].type == RPG_BAR_SKILL && (skill == 0 || h->bar.slot[i].id == skill))
+            rpg_bar_unbind(&h->bar, i);
+    }
+}
+
+static int skill_bindable(int id)
+{
+    const RpgSkillInfo *s = find_skill(id);
+
+    if (!s)
+        return 1;
+    if (s->flags & RPG_SF_ACTIVE)
+        return 1;
+    if (s->flags & RPG_SF_PASSIVE)
+        return 0;
+    return 1;
+}
+
+void rpg_hero_bar_put(RpgHero *h, int slot, int type, int id)
+{
+    if (!h)
+        return;
+    if (type == RPG_BAR_SKILL && (!rpg_book_has(&h->build.skills, id) || !skill_bindable(id)))
+        return;
+    rpg_bar_put(&h->bar, slot, type, id);
+}
+
+int rpg_class_get(const RpgHero *h)
+{
+    return h ? h->build.class_id : 0;
+}
+
+int rpg_talent_unspent(const RpgHero *h)
+{
+    return h ? h->build.talent_unspent : 0;
+}
+
+void rpg_talent_grant(RpgHero *h, int n)
+{
+    if (h && n > 0)
+        h->build.talent_unspent += n;
+}
+
+int rpg_class_ok(int class_id)
+{
+    if (class_id == 0)
+        return 1;
+    if (!R || R->class_n <= 0)
+        return 1;
+    return find_class(class_id) != NULL;
+}
+
+static void grant_level_skills(RpgHero *h)
+{
+    int i, lv;
+    const RpgSkillInfo *s;
+
+    if (!h || !R || !R->skills)
+        return;
+    lv = hero_level(h);
+    for (i = 0; i < R->skill_n; i++) {
+        s = &R->skills[i];
+        if (s->id == 0 || s->grant_level <= 0 || lv < s->grant_level)
+            continue;
+        if (!class_allows(h->build.class_id, s->class_id))
+            continue;
+        if (!rpg_book_has(&h->build.skills, s->id))
+            rpg_book_set(&h->build.skills, s->id, 1);
+    }
+}
+
+void rpg_build_respec(RpgHero *h)
+{
+    const RpgClassInfo *c;
+    int i;
+
+    if (!h)
+        return;
+    rpg_book_clear(&h->build.skills);
+    rpg_book_clear(&h->build.talents);
+    bar_unbind_skill(h, 0);
+    c = find_class(h->build.class_id);
+    h->build.talent_unspent = c ? c->start_pts : 0;
+    if (c) {
+        for (i = 0; i < RPG_CLASS_START; i++) {
+            if (c->start_skill[i])
+                rpg_book_set(&h->build.skills, c->start_skill[i], 1);
+        }
+    }
+    grant_level_skills(h);
+    rpg_hero_refresh(h);
+}
+
+int rpg_class_set(RpgHero *h, int class_id)
+{
+    if (!h || !rpg_class_ok(class_id))
+        return -1;
+    h->build.class_id = class_id;
+    rpg_build_respec(h);
+    return 0;
+}
+
+int rpg_skill_known(const RpgHero *h, int id)
+{
+    return h && rpg_book_has(&h->build.skills, id);
+}
+
+int rpg_skill_rank(const RpgHero *h, int id)
+{
+    return h ? rpg_book_get(&h->build.skills, id) : 0;
+}
+
+int rpg_skill_ok(const RpgHero *h, int id)
+{
+    const RpgSkillInfo *s;
+
+    if (!h || id == 0)
+        return 0;
+    if (!R || R->skill_n <= 0)
+        return 1;
+    s = find_skill(id);
+    return s && class_allows(h->build.class_id, s->class_id);
+}
+
+int rpg_skill_learn(RpgHero *h, int id)
+{
+    if (!h || !rpg_skill_ok(h, id))
+        return -1;
+    if (rpg_book_learn(&h->build.skills, id) != 0)
+        return -1;
+    rpg_hero_refresh(h);
+    return 0;
+}
+
+int rpg_skill_train(RpgHero *h, int id)
+{
+    const RpgSkillInfo *s;
+    int cur, cap;
+
+    if (!h || !rpg_skill_ok(h, id))
+        return -1;
+    s = find_skill(id);
+    cap = s ? rank_cap(s->max_rank) : 99;
+    cur = rpg_book_get(&h->build.skills, id);
+    if (cur >= cap)
+        return -1;
+    if (rpg_book_set(&h->build.skills, id, cur + 1) != 0)
+        return -1;
+    rpg_hero_refresh(h);
+    return 0;
+}
+
+int rpg_skill_forget(RpgHero *h, int id)
+{
+    if (!h || rpg_book_forget(&h->build.skills, id) != 0)
+        return -1;
+    bar_unbind_skill(h, id);
+    rpg_hero_refresh(h);
+    return 0;
+}
+
+int rpg_talent_rank(const RpgHero *h, int id)
+{
+    return h ? rpg_book_get(&h->build.talents, id) : 0;
+}
+
+int rpg_talent_ok(const RpgHero *h, int id)
+{
+    const RpgTalentInfo *t;
+    int cur, cap, need, req;
+
+    if (!h || id == 0)
+        return 0;
+    t = find_talent(id);
+    if (R && R->talent_n > 0) {
+        if (!t || !class_allows(h->build.class_id, t->class_id))
+            return 0;
+        if (t->req_level > 0 && hero_level(h) < t->req_level)
+            return 0;
+        req = t->req_rank > 0 ? t->req_rank : 1;
+        if (t->req_id && prereq_rank(h, t->req_id) < req)
+            return 0;
+        cap = rank_cap(t->max_rank);
+        need = talent_cost(t);
+    } else {
+        cap = 99;
+        need = 1;
+    }
+    cur = rpg_book_get(&h->build.talents, id);
+    if (cur >= cap)
+        return 0;
+    return h->build.talent_unspent >= need;
+}
+
+int rpg_talent_take(RpgHero *h, int id)
+{
+    const RpgTalentInfo *t;
+    int cur, need;
+
+    if (!rpg_talent_ok(h, id))
+        return -1;
+    t = find_talent(id);
+    need = talent_cost(t);
+    cur = rpg_book_get(&h->build.talents, id);
+    if (rpg_book_set(&h->build.talents, id, cur + 1) != 0)
+        return -1;
+    h->build.talent_unspent -= need;
+    rpg_hero_refresh(h);
+    return 0;
+}
+
+int rpg_hero_gain_xp(RpgHero *h, int xp)
+{
+    int n;
+
+    if (!h)
+        return 0;
+    n = rpg_gain_xp(&h->base, xp);
+    if (n && R && R->talent_per_level > 0)
+        h->build.talent_unspent += n * R->talent_per_level;
+    if (n)
+        grant_level_skills(h);
+    rpg_hero_refresh(h);
+    return n;
+}
+
+void rpg_bar_unbind(RpgBar *b, int slot)
+{
+    if (!b || !bar_ok(slot))
+        return;
+    memset(&b->slot[slot], 0, sizeof(b->slot[slot]));
+}
+
+void rpg_bar_swap(RpgBar *bar, int ia, int ib)
+{
+    RpgBarSlot t;
+
+    if (!bar || !bar_ok(ia) || !bar_ok(ib) || ia == ib)
+        return;
+    t = bar->slot[ia];
+    bar->slot[ia] = bar->slot[ib];
+    bar->slot[ib] = t;
+}
+
+int rpg_bar_activate(RpgHero *h, int slot)
+{
+    RpgBarSlot *s;
+    int gi;
+
+    if (!h || !bar_ok(slot))
+        return 0;
+    s = &h->bar.slot[slot];
+    if (s->type == RPG_BAR_SKILL)
+        return rpg_skill_known(h, s->id) && skill_bindable(s->id) ? -1 : 0;
+    if (s->type != RPG_BAR_ITEM || s->id == RPG_NONE)
+        return 0;
+    gi = rpg_inv_find(&h->inv, s->id);
+    if (gi < 0)
+        return 0;
+    if (h->inv.grid[gi].flags & RPG_IF_USE)
+        return rpg_use(h, &h->inv.grid[gi]) ? 1 : 0;
+    if (rpg_equip(&h->inv, gi) == 0)
+        return 1;
+    return 0;
 }
 
 int rpg_buy(RpgHero *h, RpgItem *stock, int stock_n, int i)

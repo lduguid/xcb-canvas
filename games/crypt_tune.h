@@ -2,14 +2,18 @@
 #define CRYPT_TUNE_H
 
 /* Crypt balance. Numbers live in games/crypt_tune.c — edit there, F5.
- * Formulas (HP/VIT, hit chance, walk speed) apply on the next swing/refresh.
- * Starting kit, gold, bag size, and monster tables need F6 (new run). */
+ * Formulas (HP/VIT, hit chance, walk speed, monster speed, sight) apply on the next
+ * swing / AI step. Starting kit, gold, bag size, and which monsters spawn need F6. */
 
 typedef struct {
     const char *name;
     int hp, dmg_min, dmg_max, armor, xp, gold_min, gold_max;
-    float speed, aggro, range, radius;
+    float speed, sight, range, radius;
     float r, g, b;
+    int role;     /* RPG_ROLE_* (0 minion) */
+    int ability;  /* game ability id, 0 none */
+    float leash, ability_cd;
+    int see_walls; /* 1 = notice the hero through walls */
 } CryptSpecies;
 
 typedef struct CryptTune {
@@ -57,7 +61,7 @@ typedef struct CryptTune {
     } affix;
 
     struct {
-        float champ_hp, champ_xp, champ_ac;
+        float champ_hp, champ_xp, champ_ac, champ_speed, boss_speed, champ_sight;
         int champ_dex, champ_gold_mul, dex_base, str_base, xp_per_depth;
     } scale;
 
@@ -70,6 +74,7 @@ typedef struct CryptTune {
         int per_room, per_depth_div, extra, cap;
         int depth1, depth1_extra, champ_pct, champ_per_depth;
         int reveal, reveal_overworld;
+        int boss_min_depth;
     } dungeon;
 
     struct {

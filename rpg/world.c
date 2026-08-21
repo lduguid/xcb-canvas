@@ -3,8 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TILE 32.0f
-
 int rpg_zone_safe(int zone)
 {
     return zone == RPG_ZONE_TOWN;
@@ -104,8 +102,7 @@ int rpg_place_near(const RpgWorld *w, float x, float y, float rad)
 
     for (i = 0; i < w->place_n[w->zone]; i++) {
         p = &w->places[w->zone][i];
-        px = p->tx * TILE + TILE * 0.5f;
-        py = p->ty * TILE + TILE * 0.5f;
+        dungeon_tile_pos(p->tx, p->ty, &px, &py);
         d = (x - px) * (x - px) + (y - py) * (y - py);
         if (d < bd) {
             bd = d;

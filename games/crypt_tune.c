@@ -1,9 +1,9 @@
-#include "games/crypt_tune.h"
+#include "games/crypt.h"
 
 /*
  * Crypt balance knobs — this is the file to edit while playing.
  *
- *   F5  live formulas (HP, melee, walk, drop rates, spawn counts)
+ *   F5  live formulas (HP, melee, walk, monster speed, drop rates, spawn counts)
  *   F6  new hero (start stats, kit, gold) and a fresh world
  *
  * Keep related numbers together. One value per line.
@@ -132,6 +132,9 @@ const CryptTune Crypt = {
         .champ_hp = 1.8f,
         .champ_xp = 2.5f,
         .champ_ac = 1.3f,
+        .champ_speed = 1.12f,
+        .boss_speed = 1.0f,
+        .champ_sight = 1.2f,
         .champ_dex = 6,
         .champ_gold_mul = 3,
         .dex_base = 8,
@@ -159,6 +162,7 @@ const CryptTune Crypt = {
         .champ_per_depth = 1,
         .reveal = 8,
         .reveal_overworld = 11,
+        .boss_min_depth = 2,
     },
 
     /* movement / swing cadence / death tax */
@@ -174,12 +178,15 @@ const CryptTune Crypt = {
     },
 };
 
-/* hp  dmin dmax ac  xp  gold     speed aggro range rad   color
- * tweak a row, F6 into a floor that spawns that species */
+/* hp  dmin dmax ac  xp  gold     speed  sight range rad   color
+ * sight = detect radius (world units). F5 updates live movers.
+ * role / ability / leash / ability_cd / see_walls */
 const CryptSpecies crypt_species[] = {
-    { "Imp",      18, 2,  5,  2, 12, 1,  6,  95.0f, 160.0f, 28.0f, 10.0f, 0.72f, 0.22f, 0.18f },
-    { "Skeleton", 32, 4,  9,  6, 22, 2, 10,  80.0f, 190.0f, 32.0f, 11.0f, 0.78f, 0.76f, 0.68f },
-    { "Brute",    55, 6, 13, 10, 36, 4, 16,  70.0f, 170.0f, 34.0f, 14.0f, 0.42f, 0.55f, 0.28f },
-    { "Shade",    28, 8, 16,  3, 40, 6, 20, 110.0f, 220.0f, 36.0f, 10.0f, 0.42f, 0.28f, 0.62f },
+    { "Imp",      18, 2,  5,  2, 12, 1,  6,  125.0f, 120.0f, 28.0f, 10.0f, 0.72f, 0.22f, 0.18f, RPG_ROLE_MINION, 0, 0, 0, 0 },
+    { "Skeleton", 32, 4,  9,  6, 22, 2, 10,   90.0f, 200.0f, 32.0f, 11.0f, 0.78f, 0.76f, 0.68f, RPG_ROLE_MINION, 0, 0, 0, 0 },
+    { "Brute",    55, 6, 13, 10, 36, 4, 16,   52.0f,  88.0f, 34.0f, 14.0f, 0.42f, 0.55f, 0.28f, RPG_ROLE_MINION, 0, 0, 0, 0 },
+    { "Shade",    28, 8, 16,  3, 40, 6, 20,  155.0f, 300.0f, 36.0f, 10.0f, 0.42f, 0.28f, 0.62f, RPG_ROLE_MINION, 0, 0, 0, 1 },
+    { "Warden",  140, 12, 22, 16, 120, 24, 55, 64.0f, 260.0f, 42.0f, 18.0f, 0.88f, 0.48f, 0.16f,
+      RPG_ROLE_BOSS, CRYPT_AB_SLAM, 400.0f, 3.2f, 0 },
 };
-const int crypt_species_n = 4;
+const int crypt_species_n = 5;

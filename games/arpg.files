@@ -2,5 +2,7 @@ rpg/rpg.c
 rpg/dungeon.c
 rpg/world.c
 rpg/loot.c
+rpg/path.c
+rpg/actor.c
 games/crypt.c
 games/crypt_tune.c

@@ -4,8 +4,6 @@
 #include <math.h>
 #include <string.h>
 
-#define TILE 32.0f
-
 static int in_map(int x, int y)
 {
     return x >= 0 && y >= 0 && x < DUN_W && y < DUN_H;
@@ -152,10 +150,27 @@ void dungeon_gen(Dungeon *d, unsigned seed)
     d->stair_ty = d->rooms[d->room_n - 1].y + d->rooms[d->room_n - 1].h / 2;
 }
 
+void dungeon_pos_tile(float x, float y, int *tx, int *ty)
+{
+    if (tx)
+        *tx = (int)floorf(x / DUN_TILE);
+    if (ty)
+        *ty = (int)floorf(y / DUN_TILE);
+}
+
+void dungeon_tile_pos(int tx, int ty, float *x, float *y)
+{
+    if (x)
+        *x = (float)tx * DUN_TILE + DUN_TILE * 0.5f;
+    if (y)
+        *y = (float)ty * DUN_TILE + DUN_TILE * 0.5f;
+}
+
 static int blocked_xy(const Dungeon *d, float x, float y)
 {
-    int tx = (int)floorf(x / TILE);
-    int ty = (int)floorf(y / TILE);
+    int tx, ty;
+
+    dungeon_pos_tile(x, y, &tx, &ty);
     return !dungeon_walk(d, tx, ty);
 }
 

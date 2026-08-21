@@ -5,6 +5,7 @@
  * Tweak numbers in games/crypt_tune.c (F5 / F6). */
 
 #include "games/crypt_tune.h"
+#include "rpg/actor.h"
 #include "rpg/rpg.h"
 #include "rpg/world.h"
 
@@ -41,6 +42,8 @@ enum {
     IT_MPOT
 };
 
+enum { CRYPT_AB_NONE = 0, CRYPT_AB_SLAM };
+
 extern const RpgRules crypt_rules;
 
 void crypt_bind(void);
@@ -50,6 +53,10 @@ RpgItem crypt_potion(int life);
 RpgItem crypt_roll_gear(int depth);
 RpgDrop crypt_roll_drop(int depth, int champion);
 void crypt_mob_stats(RpgStats *out, const CryptSpecies *sp, int depth, int champion);
+void crypt_actor_setup(RpgActor *a, int species, int depth, int champion);
+void crypt_actor_refresh(RpgActor *a);
+int crypt_roll_species(int depth);
+int crypt_boss_species(void);
 const char *crypt_zone_title(const RpgWorld *w);
 
 #endif

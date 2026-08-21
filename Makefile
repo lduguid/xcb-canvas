@@ -10,7 +10,7 @@ CANVAS_OBJ = $(CORE) $(PLAT)
 
 GAMES = wander bounce pacman plat vector crate arpg
 PLUGINS = $(addsuffix .so,$(GAMES))
-ARPG_SRC = games/arpg.c games/crypt.c games/crypt_tune.c rpg/rpg.c rpg/dungeon.c rpg/world.c rpg/loot.c
+ARPG_SRC = games/arpg.c games/crypt.c games/crypt_tune.c rpg/rpg.c rpg/dungeon.c rpg/world.c rpg/loot.c rpg/path.c rpg/actor.c
 
 all: $(GAMES) canvas $(PLUGINS)
 
@@ -46,7 +46,7 @@ crate: $(HOST_SRC) $(CANVAS_OBJ) crate.so include/canvas.h
 arpg: $(HOST_SRC) $(CANVAS_OBJ) arpg.so include/canvas.h
 	$(CC) $(CFLAGS) -rdynamic -DCANVAS_LAUNCH=\"arpg\" -o $@ $(HOST_SRC) $(CANVAS_OBJ) $(LIBS) -ldl
 
-arpg.so: $(ARPG_SRC) rpg/rpg.h rpg/dungeon.h rpg/world.h rpg/loot.h games/crypt.h games/crypt_tune.h include/canvas.h
+arpg.so: $(ARPG_SRC) rpg/rpg.h rpg/dungeon.h rpg/world.h rpg/loot.h rpg/path.h rpg/actor.h games/crypt.h games/crypt_tune.h include/canvas.h
 	$(CC) $(CFLAGS) -shared -fPIC -DCANVAS_PLUGIN -o $@ $(ARPG_SRC) -lm
 
 %.so: games/%.c include/canvas.h

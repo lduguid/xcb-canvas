@@ -350,6 +350,119 @@ void crypt_mob_stats(RpgStats *out, const CryptSpecies *sp, int depth, int champ
         out->v[ST_GOLD] *= T->scale.champ_gold_mul;
 }
 
+static float crypt_move_speed(const CryptSpecies *sp, int role)
+{
+    float s, mul;
+
+    s = sp && sp->speed > 1.0f ? sp->speed : 1.0f;
+    if (role == RPG_ROLE_CHAMPION)
+        mul = Crypt.scale.champ_speed;
+    else if (role == RPG_ROLE_BOSS)
+        mul = Crypt.scale.boss_speed;
+    else
+        mul = 1.0f;
+    if (mul < 0.05f)
+        mul = 1.0f;
+    return s * mul;
+}
+
+static float crypt_sight(const CryptSpecies *sp, int role)
+{
+    float s, mul;
+
+    s = sp && sp->sight > 1.0f ? sp->sight : 96.0f;
+    mul = (role == RPG_ROLE_CHAMPION || role == RPG_ROLE_BOSS) ? Crypt.scale.champ_sight : 1.0f;
+    if (mul < 0.05f)
+        mul = 1.0f;
+    return s * mul;
+}
+
+void crypt_actor_setup(RpgActor *a, int species, int depth, int champion)
+{
+    const CryptSpecies *sp;
+    RpgActorFeel f;
+
+    if (!a)
+        return;
+    rpg_actor_clear(a);
+    if (species < 0 || species >= crypt_species_n)
+        species = 0;
+    sp = &crypt_species[species];
+    a->alive = 1;
+    a->kind = species;
+    if (sp->role == RPG_ROLE_BOSS)
+        champion = 1;
+    crypt_mob_stats(&a->st, sp, depth, champion);
+    memset(&f, 0, sizeof(f));
+    if (sp->role == RPG_ROLE_BOSS)
+        f.role = RPG_ROLE_BOSS;
+    else if (champion)
+        f.role = RPG_ROLE_CHAMPION;
+    else
+        f.role = RPG_ROLE_MINION;
+    f.speed = crypt_move_speed(sp, f.role);
+    f.sight = crypt_sight(sp, f.role);
+    f.leash = sp->leash;
+    f.range = sp->range;
+    f.radius = sp->radius;
+    f.see_walls = sp->see_walls;
+    f.attack_reload = Crypt.feel.mob_swing;
+    f.ability_reload = sp->ability_cd;
+    f.ability = sp->ability;
+    rpg_actor_feel(a, &f);
+}
+
+void crypt_actor_refresh(RpgActor *a)
+{
+    const CryptSpecies *sp;
+    RpgActorFeel f;
+
+    if (!a || !a->alive || a->kind < 0 || a->kind >= crypt_species_n)
+        return;
+    sp = &crypt_species[a->kind];
+    memset(&f, 0, sizeof(f));
+    f.role = a->role;
+    f.speed = crypt_move_speed(sp, a->role);
+    f.sight = crypt_sight(sp, a->role);
+    f.leash = sp->leash;
+    f.range = sp->range;
+    f.radius = sp->radius;
+    f.see_walls = sp->see_walls;
+    f.attack_reload = Crypt.feel.mob_swing;
+    f.ability_reload = sp->ability_cd;
+    f.ability = sp->ability;
+    rpg_actor_feel(a, &f);
+}
+
+int crypt_roll_species(int depth)
+{
+    int ids[16], n = 0, i, cap;
+
+    if (depth <= 1)
+        return 0;
+    cap = depth > 6 ? crypt_species_n - 1 : (depth < 3 ? 1 : 2);
+    for (i = 0; i <= cap && i < crypt_species_n; i++) {
+        if (crypt_species[i].role == RPG_ROLE_BOSS)
+            continue;
+        if (n < 16)
+            ids[n++] = i;
+    }
+    if (!n)
+        return 0;
+    return ids[rpg_rng(0, n - 1)];
+}
+
+int crypt_boss_species(void)
+{
+    int i;
+
+    for (i = 0; i < crypt_species_n; i++) {
+        if (crypt_species[i].role == RPG_ROLE_BOSS)
+            return i;
+    }
+    return -1;
+}
+
 const RpgRules crypt_rules = {
     .stat_n = ST_N,
     .inv_w = 10,
@@ -408,6 +521,8 @@ void crypt_kit(RpgHero *pc)
     pot = crypt_potion(0);
     pot.stack = Crypt.kit.mp_pots;
     rpg_inv_add(&pc->inv, pot);
+    rpg_bar_bind_item(&pc->bar, 0, IT_HPOT);
+    rpg_bar_bind_item(&pc->bar, 1, IT_MPOT);
     rpg_set(&pc->base, ST_GOLD, Crypt.start.gold);
     rpg_hero_refresh(pc);
 }

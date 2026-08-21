@@ -9,7 +9,7 @@ Do not include X11, Win32, OpenGL, or anything under `src/`.
 Shipped games: `wander`, `bounce`, `pacman`, `plat`, `vector`, `crate`, and `arpg` (Crypt). Steal from those after the catch sketch below. Crypt is the exception to “one file”. Layers:
 
 - **canvas** — window, input, draw, audio (`canvas.h`). Shared by every game.
-- **rpg/** — ARPG engine API: stat bags, items, inventory, equipment, gold/XP, ground loot, melee dispatch, zone graph. No `canvas.h`. A game binds `RpgRules` (which stats exist, bag size, formulas, item text).
+- **rpg/** — ARPG engine API: stat bags, items, inventory, equipment, class/skill/talent builds, gold/XP, ground loot, melee dispatch, zone graph. No `canvas.h`. A game binds `RpgRules` (which stats exist, bag size, formulas, item text, optional class catalogs).
 - **this game** — `games/crypt_tune.c` (all balance numbers), `games/crypt.c` (Haven, items, rules callbacks), `games/arpg.c` (draw / input). Edit tunables, F5; F6 for a new hero.
 
 List extra `.c` files in `games/<name>.files` so F5 rebuilds them too.
@@ -91,7 +91,7 @@ make arpg && ./arpg
 
 Keep `assets/` next to the exe. Extra F5 sources: `games/arpg.files`. Details of the engine: `rpg/README.md`.
 
-**Play.** Click to walk, attack, or take loot. WASD also moves. **I**, **C**, or **Tab** toggles the character sheet (same key closes it; Esc quits). Space uses / talks to a place. 1 / 2 drink potions. Haven is safe (vendor, stash, gate). The Wilds has imps and four dungeon portals. Death returns to Haven with a gold tax.
+**Play.** Click to walk, attack, or take loot. WASD also moves. **I**, **C**, or **Tab** toggles the character sheet (same key closes it). Esc or Q asks to quit (Esc/Y again leaves; N stays). Space uses / talks to a place. Keys **1–5** use the action bar (new heroes start with HP on 1 and mana on 2). Open the sheet and drag a bag item or a known spell onto a slot; right-click a slot to clear it; drag a slot off the bar to unbind. Haven is safe (vendor, stash, gate). The Wilds has imps and four dungeon portals. Depth 2+ dungeons spawn a **Warden** in the last room (slam). Death returns to Haven with a gold tax.
 
 **Tune.** `games/crypt_tune.c` is all the numbers. F5 applies live formulas (HP, melee, walk). F6 starts a new hero, kit, and world.
 

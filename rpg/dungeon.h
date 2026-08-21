@@ -5,6 +5,11 @@ enum { DUN_W = 72, DUN_H = 72, DUN_ROOMS = 14 };
 
 enum { DUN_WALL = 0, DUN_FLOOR = 1 };
 
+#define DUN_TILE 32.0f
+
+void dungeon_pos_tile(float x, float y, int *tx, int *ty);
+void dungeon_tile_pos(int tx, int ty, float *x, float *y);
+
 typedef struct {
     int x, y, w, h;
 } DunRoom;

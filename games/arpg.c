@@ -1,5 +1,6 @@
 #include "canvas.h"
 #include "games/crypt.h"
+#include "rpg/actor.h"
 #include "rpg/dungeon.h"
 #include "rpg/loot.h"
 #include "rpg/rpg.h"
@@ -10,8 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TILE 32.0f
-#define MOB_MAX 80
+#define TILE DUN_TILE
+#define MOB_MAX RPG_ACTOR_MAX
 #define FX_MAX 72
 #define BLOOD_MAX 140
 #define HERO_RAD 10.0f
@@ -19,14 +20,13 @@
 #define LOOT_TAKE 30.0f
 #define WEAR_CELL 44.0f
 #define BAG_CELL 36.0f
+#define BAR_CELL 42.0f
+#define BAR_GAP 5.0f
+#define BOOK_W 8
+#define BOOK_H 3
 
 enum { UI_NONE = 0, UI_INV, UI_VENDOR, UI_BANK, UI_QUEST };
-
-typedef struct {
-    int alive, species, champ;
-    RpgStats st;
-    float x, y, attack_cd, hurt;
-} Mob;
+enum { DRAG_NONE = 0, DRAG_BAG, DRAG_BAR, DRAG_BOOK };
 
 typedef struct {
     int on, dmg, crit;
@@ -46,14 +46,16 @@ typedef struct {
     Sheet tiles, walk, icons;
     Sheet ts_haven, ts_wilds, ts_dun;
     unsigned portrait, portal;
-    Mob mobs[MOB_MAX];
+    RpgActor mobs[MOB_MAX];
     Fx fx[FX_MAX];
     Blood blood[BLOOD_MAX];
-    Mob ow_mobs[MOB_MAX];
-    int ui, dead, hover_loot, hover_mob, hover_place;
+    RpgActor ow_mobs[MOB_MAX];
+    int ui, dead, quit_ask, hover_loot, hover_mob, hover_place;
     int target, loot_want, has_dest, mob_n;
-    int ow_ready, ow_mob_n;
-    float dest_x, dest_y, attack_cd, bob, step_t, dead_t, note_t;
+    int ow_ready, ow_mob_n, drag_src, drag_i, drag_live;
+    float dest_x, dest_y, attack_cd, bob, step_t, dead_t, note_t, walk_gait;
+    float drag_px, drag_py;
+    int walk_beat;
     char note[72];
     unsigned snd_hit, snd_miss, snd_die, snd_loot, snd_step, snd_drink, snd_level;
 } Arpg;
@@ -63,7 +65,7 @@ static int LS(const Arpg *g, int id)
     return rpg_get(&g->pc.live, id);
 }
 
-static int MS(const Mob *m, int id)
+static int MS(const RpgActor *m, int id)
 {
     return rpg_get(&m->st, id);
 }
@@ -99,6 +101,37 @@ static float dist2(float ax, float ay, float bx, float by)
 {
     float dx = ax - bx, dy = ay - by;
     return dx * dx + dy * dy;
+}
+
+static float gait_bob(float gait)
+{
+    return sinf(gait * 6.2831853f);
+}
+
+#define QUIT_BW 108.0f
+#define QUIT_BH 28.0f
+
+static void quit_panel(int W, int H, float *x, float *y, float *w, float *h)
+{
+    *w = 340.0f;
+    *h = 128.0f;
+    *x = (float)W * 0.5f - *w * 0.5f;
+    *y = (float)H * 0.5f - *h * 0.5f;
+}
+
+static void quit_btns(int W, int H, float *stay_x, float *quit_x, float *by)
+{
+    float x, y, w, h;
+
+    quit_panel(W, H, &x, &y, &w, &h);
+    *by = y + 72.0f;
+    *stay_x = x + 28.0f;
+    *quit_x = x + w - 28.0f - QUIT_BW;
+}
+
+static int hit_rect(float mx, float my, float x, float y, float w, float h)
+{
+    return mx >= x && mx < x + w && my >= y && my < y + h;
 }
 
 static const Sheet *zone_tiles(const Arpg *g)
@@ -191,7 +224,7 @@ static void add_blood(Arpg *g, float x, float y)
 
 static void spawn_mobs(Arpg *g)
 {
-    int r, n, k, tx, ty, sp, champ, i;
+    int r, n, k, tx, ty, sp, champ, i, boss;
     Dungeon *d = cmap(g);
     int depth = g->world.depth;
 
@@ -207,12 +240,8 @@ static void spawn_mobs(Arpg *g)
             if ((tx - 36) * (tx - 36) + (ty - 10) * (ty - 10) < Crypt.wilds.gate_tiles * Crypt.wilds.gate_tiles)
                 continue;
             i = g->mob_n++;
-            g->mobs[i].alive = 1;
-            g->mobs[i].species = 0; /* imps only out here */
-            g->mobs[i].champ = 0;
-            g->mobs[i].x = tx * TILE + TILE * 0.5f;
-            g->mobs[i].y = ty * TILE + TILE * 0.5f;
-            crypt_mob_stats(&g->mobs[i].st, &crypt_species[0], 1, 0);
+            crypt_actor_setup(&g->mobs[i], 0, 1, 0);
+            dungeon_tile_pos(tx, ty, &g->mobs[i].x, &g->mobs[i].y);
             rpg_set(&g->mobs[i].st, ST_DMIN, Crypt.wilds.imp_dmin);
             rpg_set(&g->mobs[i].st, ST_DMAX, Crypt.wilds.imp_dmax);
         }
@@ -226,22 +255,20 @@ static void spawn_mobs(Arpg *g)
             n = Crypt.dungeon.cap;
         for (k = 0; k < n && g->mob_n < MOB_MAX; k++) {
             dungeon_room_floor(d, r, &tx, &ty);
-            if (depth <= 1)
-                sp = 0;
-            else
-                sp = rpg_rng(0, depth > 6 ? crypt_species_n - 1 : (depth < 3 ? 1 : 2));
-            if (sp >= crypt_species_n)
-                sp = crypt_species_n - 1;
+            sp = crypt_roll_species(depth);
             champ = (depth > 1 && rpg_rng(0, 99) < Crypt.dungeon.champ_pct + depth * Crypt.dungeon.champ_per_depth) ? 1
                                                                                                                     : 0;
             i = g->mob_n++;
-            g->mobs[i].alive = 1;
-            g->mobs[i].species = sp;
-            g->mobs[i].champ = champ;
-            g->mobs[i].x = tx * TILE + TILE * 0.5f;
-            g->mobs[i].y = ty * TILE + TILE * 0.5f;
-            crypt_mob_stats(&g->mobs[i].st, &crypt_species[sp], depth, champ);
+            crypt_actor_setup(&g->mobs[i], sp, depth, champ);
+            dungeon_tile_pos(tx, ty, &g->mobs[i].x, &g->mobs[i].y);
         }
+    }
+    boss = crypt_boss_species();
+    if (boss >= 0 && depth >= Crypt.dungeon.boss_min_depth && d->room_n > 1 && g->mob_n < MOB_MAX) {
+        dungeon_room_floor(d, d->room_n - 1, &tx, &ty);
+        i = g->mob_n++;
+        crypt_actor_setup(&g->mobs[i], boss, depth, 1);
+        dungeon_tile_pos(tx, ty, &g->mobs[i].x, &g->mobs[i].y);
     }
 }
 
@@ -425,18 +452,125 @@ static void interact_place(Arpg *g, Canvas *c, int pi)
     }
 }
 
-static int drink_kind(Arpg *g, int kind)
+static int fire_bar(Arpg *g, Canvas *c, int slot)
 {
-    int i, n;
+    RpgBarSlot *s;
+    int use = 0, gi, rc;
 
-    for (i = 0; i < rpg_inv_n(); i++) {
-        if (g->pc.inv.grid[i].kind != kind)
-            continue;
-        n = rpg_use(&g->pc, &g->pc.inv.grid[i]);
-        sync_hp(g);
-        return n;
+    if (slot < 0 || slot >= RPG_BAR_N)
+        return 0;
+    s = &g->pc.bar.slot[slot];
+    if (s->type == RPG_BAR_ITEM) {
+        gi = rpg_inv_find(&g->pc.inv, s->id);
+        if (gi >= 0 && (g->pc.inv.grid[gi].flags & RPG_IF_USE))
+            use = 1;
+    }
+    rc = rpg_bar_activate(&g->pc, slot);
+    if (rc > 0) {
+        if (use) {
+            canvas_sound_play(c, g->snd_drink, 0.6f);
+            say(g, c, "Used");
+            sync_hp(g);
+        } else {
+            say(g, c, "Equipped");
+            refresh(g);
+        }
+        return 1;
+    }
+    if (rc < 0)
+        say(g, c, "Can't cast that yet");
+    else if (s->type == RPG_BAR_ITEM)
+        say(g, c, "None left");
+    return 0;
+}
+
+static void bar_origin(int W, int H, float *x, float *y)
+{
+    (void)W;
+    *x = 268.0f;
+    *y = (float)H - 56.0f;
+}
+
+static int bar_hit(int W, int H, float mx, float my, int *slot)
+{
+    float x, y, sx;
+    int i;
+
+    bar_origin(W, H, &x, &y);
+    if (my < y || my >= y + BAR_CELL)
+        return 0;
+    for (i = 0; i < RPG_BAR_N; i++) {
+        sx = x + (float)i * (BAR_CELL + BAR_GAP);
+        if (mx >= sx && mx < sx + BAR_CELL) {
+            *slot = i;
+            return 1;
+        }
     }
     return 0;
+}
+
+static void book_origin(float px, float py, float *x, float *y)
+{
+    *x = px + 250.0f;
+    *y = py + 208.0f;
+}
+
+static int book_hit(float mx, float my, float ox, float oy, int *out)
+{
+    int col, row;
+    float x, y;
+
+    x = mx - ox;
+    y = my - oy;
+    if (x < 0 || y < 0)
+        return 0;
+    col = (int)(x / BAG_CELL);
+    row = (int)(y / BAG_CELL);
+    if (col < 0 || row < 0 || col >= BOOK_W || row >= BOOK_H)
+        return 0;
+    *out = row * BOOK_W + col;
+    return 1;
+}
+
+static void draw_skill_mark(Canvas *c, float x, float y, float s)
+{
+    canvas_fill_rect(c, x + s * 0.18f, y + s * 0.18f, s * 0.64f, s * 0.64f, 0.38f, 0.3f, 0.58f, 0.95f);
+}
+
+static int drag_payload(const Arpg *g, RpgBarSlot *out)
+{
+    int id;
+
+    memset(out, 0, sizeof(*out));
+    if (g->drag_src == DRAG_BAG && g->drag_i >= 0 && g->drag_i < rpg_inv_n() &&
+        rpg_item_ok(&g->pc.inv.grid[g->drag_i])) {
+        out->type = RPG_BAR_ITEM;
+        out->id = g->pc.inv.grid[g->drag_i].kind;
+        return 1;
+    }
+    if (g->drag_src == DRAG_BOOK) {
+        id = rpg_book_id(&g->pc.build.skills, g->drag_i);
+        if (id) {
+            out->type = RPG_BAR_SKILL;
+            out->id = id;
+            return 1;
+        }
+    }
+    if (g->drag_src == DRAG_BAR && g->drag_i >= 0 && g->drag_i < RPG_BAR_N &&
+        g->pc.bar.slot[g->drag_i].type != RPG_BAR_EMPTY) {
+        *out = g->pc.bar.slot[g->drag_i];
+        return 1;
+    }
+    return 0;
+}
+
+static void drag_begin(Arpg *g, int src, int i, float mx, float my)
+{
+    g->drag_src = src;
+    g->drag_i = i;
+    g->drag_live = 0;
+    g->drag_px = mx;
+    g->drag_py = my;
 }
 
 static int take_loot(Arpg *g, Canvas *c, int i)
@@ -490,7 +624,7 @@ static int mob_at(Arpg *g, float x, float y)
     for (i = 0; i < g->mob_n; i++) {
         if (!g->mobs[i].alive)
             continue;
-        rad = crypt_species[g->mobs[i].species].radius + 8.0f;
+        rad = crypt_species[g->mobs[i].kind].radius + 8.0f;
         d = dist2(x, y, g->mobs[i].x, g->mobs[i].y);
         if (d < rad * rad && d < bd) {
             bd = d;
@@ -502,14 +636,14 @@ static int mob_at(Arpg *g, float x, float y)
 
 static void kill_mob(Arpg *g, Canvas *c, int i)
 {
-    Mob *m = &g->mobs[i];
+    RpgActor *m = &g->mobs[i];
     RpgDrop drop;
     int lv;
 
     m->alive = 0;
     add_blood(g, m->x, m->y);
     add_blood(g, m->x, m->y);
-    drop = crypt_roll_drop(g->world.depth, m->champ);
+    drop = crypt_roll_drop(g->world.depth, m->role != RPG_ROLE_MINION);
     drop.gold += MS(m, ST_GOLD);
     if (drop.gold > 0) {
         RpgDrop gold = { 0 };
@@ -521,7 +655,7 @@ static void kill_mob(Arpg *g, Canvas *c, int i)
         it.item = drop.item;
         rpg_ground_add(&g->ground, m->x + 10.0f, m->y + 6.0f, it);
     }
-    lv = rpg_gain_xp(&g->pc.base, MS(m, ST_XP));
+    lv = rpg_hero_gain_xp(&g->pc, MS(m, ST_XP));
     refresh(g);
     if (lv) {
         canvas_sound_play(c, g->snd_level, 0.8f);
@@ -534,7 +668,7 @@ static void kill_mob(Arpg *g, Canvas *c, int i)
 
 static void hero_swing(Arpg *g, Canvas *c)
 {
-    Mob *m;
+    RpgActor *m;
     int dmg, crit;
     const CryptSpecies *sp;
 
@@ -545,7 +679,7 @@ static void hero_swing(Arpg *g, Canvas *c)
         g->target = -1;
         return;
     }
-    sp = &crypt_species[m->species];
+    sp = &crypt_species[m->kind];
     if (dist2(g->spr.x, g->spr.y, m->x, m->y) > (MELEE + sp->radius) * (MELEE + sp->radius))
         return;
     dmg = rpg_melee(&g->pc.live, &m->st, &crit);
@@ -554,68 +688,80 @@ static void hero_swing(Arpg *g, Canvas *c)
     if (dmg <= 0) {
         canvas_sound_play(c, g->snd_miss, 0.4f);
         add_fx(g, m->x, m->y - 18.0f, 0, 0, 0.7f, 0.7f, 0.7f);
-        canvas_trace(c, "miss", "%s", crypt_species[m->species].name);
+        canvas_trace(c, "miss", "%s", crypt_species[m->kind].name);
         return;
     }
     rpg_add(&m->st, ST_HP, -dmg);
     m->hurt = 0.12f;
     add_fx(g, m->x, m->y - 20.0f, dmg, crit, 1.0f, crit ? 0.9f : 0.35f, 0.2f);
     canvas_sound_play(c, g->snd_hit, crit ? 0.9f : 0.65f);
-    canvas_trace(c, "hit", "%s %d%s hp %d", crypt_species[m->species].name, dmg, crit ? " crit" : "",
+    canvas_trace(c, "hit", "%s %d%s hp %d", crypt_species[m->kind].name, dmg, crit ? " crit" : "",
                  rpg_get(&m->st, ST_HP));
     if (rpg_get(&m->st, ST_HP) <= 0)
         kill_mob(g, c, g->target);
 }
 
+static void hurt_hero(Arpg *g, Canvas *c, int dmg, int crit)
+{
+    if (dmg <= 0)
+        return;
+    rpg_add(&g->pc.live, ST_HP, -dmg);
+    sync_hp(g);
+    add_fx(g, g->spr.x, g->spr.y - 28.0f, dmg, crit, 0.95f, 0.2f, 0.2f);
+    canvas_sound_play(c, g->snd_hit, crit ? 0.7f : 0.45f);
+    canvas_trace(c, "hurt", "%d hp %d", dmg, LS(g, ST_HP));
+    if (LS(g, ST_HP) <= 0) {
+        rpg_set(&g->pc.live, ST_HP, 0);
+        sync_hp(g);
+        g->dead = 1;
+        g->dead_t = 0.0f;
+        g->has_dest = 0;
+        g->target = -1;
+        canvas_sound_play(c, g->snd_die, 0.9f);
+        canvas_trace(c, "death", "hp 0 gold %d zone %s", LS(g, ST_GOLD), crypt_zone_title(&g->world));
+    }
+}
+
+static void mob_ability(Arpg *g, Canvas *c, RpgActor *m, int ab)
+{
+    int dmg, crit;
+    float reach, d;
+
+    if (ab == CRYPT_AB_SLAM) {
+        reach = m->range * 1.85f;
+        d = dist2(g->spr.x, g->spr.y, m->x, m->y);
+        add_fx(g, m->x, m->y - 10.0f, 0, 1, 0.95f, 0.45f, 0.15f);
+        canvas_trace(c, "ability", "%s slam", crypt_species[m->kind].name);
+        if (d <= reach * reach) {
+            dmg = rpg_melee(&m->st, &g->pc.live, &crit);
+            if (dmg > 0)
+                dmg = dmg + dmg / 2;
+            hurt_hero(g, c, dmg, 1);
+        }
+        return;
+    }
+}
+
 static void mob_ai(Arpg *g, Canvas *c, float dt)
 {
     int i, dmg, crit;
-    Mob *m;
-    const CryptSpecies *sp;
-    float dx, dy, len, ag, reach;
+    RpgActor *m;
+    RpgAiResult act;
 
     for (i = 0; i < g->mob_n; i++) {
         m = &g->mobs[i];
         if (!m->alive)
             continue;
-        sp = &crypt_species[m->species];
-        m->attack_cd -= dt;
-        m->hurt -= dt;
-        if (g->dead)
+        crypt_actor_refresh(m);
+        act = rpg_ai_step(m, cmap(g), g->spr.x, g->spr.y, dt, !g->dead);
+        if (g->dead || act.act == RPG_ACT_NONE)
             continue;
-        dx = g->spr.x - m->x;
-        dy = g->spr.y - m->y;
-        len = sqrtf(dx * dx + dy * dy);
-        ag = sp->aggro + (m->champ ? 40.0f : 0.0f);
-        if (len > ag || !dungeon_line_clear(cmap(g), m->x, m->y, g->spr.x, g->spr.y))
+        if (act.act == RPG_ACT_ABILITY) {
+            mob_ability(g, c, m, act.ability);
             continue;
-        reach = MELEE + sp->radius * 0.4f;
-        if (len > reach && len > 1.0f) {
-            dx = dx / len * sp->speed * dt;
-            dy = dy / len * sp->speed * dt;
-            dungeon_slide(cmap(g), &m->x, &m->y, dx, dy, sp->radius * 0.6f);
-        } else if (m->attack_cd <= 0.0f) {
-            dmg = rpg_melee(&m->st, &g->pc.live, &crit);
-            m->attack_cd = Crypt.feel.mob_swing;
-            if (dmg > 0) {
-                rpg_add(&g->pc.live, ST_HP, -dmg);
-                sync_hp(g);
-                add_fx(g, g->spr.x, g->spr.y - 28.0f, dmg, crit, 0.95f, 0.2f, 0.2f);
-                canvas_sound_play(c, g->snd_hit, 0.45f);
-                canvas_trace(c, "hurt", "%d hp %d", dmg, LS(g, ST_HP));
-                if (LS(g, ST_HP) <= 0) {
-                    rpg_set(&g->pc.live, ST_HP, 0);
-                    sync_hp(g);
-                    g->dead = 1;
-                    g->dead_t = 0.0f;
-                    g->has_dest = 0;
-                    g->target = -1;
-                    canvas_sound_play(c, g->snd_die, 0.9f);
-                    canvas_trace(c, "death", "hp 0 gold %d zone %s", LS(g, ST_GOLD),
-                                 crypt_zone_title(&g->world));
-                }
-            }
         }
+        dmg = rpg_melee(&m->st, &g->pc.live, &crit);
+        hurt_hero(g, c, dmg, crit);
     }
 }
 
@@ -629,7 +775,7 @@ static void move_hero(Arpg *g, float dt)
     dy = g->dest_y - g->spr.y;
     len = sqrtf(dx * dx + dy * dy);
     if (g->target >= 0 && g->mobs[g->target].alive) {
-        const CryptSpecies *spcs = &crypt_species[g->mobs[g->target].species];
+        const CryptSpecies *spcs = &crypt_species[g->mobs[g->target].kind];
         if (dist2(g->spr.x, g->spr.y, g->mobs[g->target].x, g->mobs[g->target].y) <
             (MELEE + spcs->radius - 4.0f) * (MELEE + spcs->radius - 4.0f)) {
             g->has_dest = 0;
@@ -666,13 +812,22 @@ static void move_hero(Arpg *g, float dt)
     dx = dx / len * step;
     dy = dy / len * step;
     {
-        float ox = g->spr.x, oy = g->spr.y;
+        float ox = g->spr.x, oy = g->spr.y, dist;
         dungeon_slide(cmap(g), &g->spr.x, &g->spr.y, dx, dy, HERO_RAD);
         g->spr.vx = (g->spr.x - ox) / (dt > 1e-6f ? dt : 1e-6f);
         g->spr.vy = (g->spr.y - oy) / (dt > 1e-6f ? dt : 1e-6f);
+        dist = sqrtf((g->spr.x - ox) * (g->spr.x - ox) + (g->spr.y - oy) * (g->spr.y - oy));
+        if (dist > 0.35f) {
+            g->walk_gait += dist / (TILE * 1.5f);
+            while (g->walk_gait >= 1.0f)
+                g->walk_gait -= 1.0f;
+        } else {
+            g->walk_gait = 0.0f;
+        }
         if (len >= 4.0f && fabsf(g->spr.x - ox) < 0.02f && fabsf(g->spr.y - oy) < 0.02f) {
             g->has_dest = 0;
             g->spr.vx = g->spr.vy = 0;
+            g->walk_gait = 0.0f;
         }
     }
     if (dx < -0.4f)
@@ -701,7 +856,7 @@ static int inv_hit_grid(float mx, float my, float ox, float oy, int *out)
 static void sheet_origin(int W, int H, float *px, float *py)
 {
     *px = (float)W * 0.5f - 330.0f;
-    *py = (float)H * 0.5f - 180.0f;
+    *py = (float)H * 0.5f - 200.0f;
 }
 
 static void wear_xy(float px, float py, int slot, float *x, float *y)
@@ -773,6 +928,7 @@ static void *init(Canvas *c)
     g->snd_drink = canvas_sound_tone(c, 480.0f, 80.0f, 0.35f);
     g->snd_level = canvas_sound_tone(c, 880.0f, 160.0f, 0.45f);
     g->hover_loot = g->hover_mob = g->hover_place = g->target = g->loot_want = -1;
+    g->walk_beat = -1;
     {
         unsigned seed = canvas_seed(c);
         if (!seed)
@@ -799,15 +955,37 @@ static void update(void *state, Canvas *c, float dt)
     float wx, wy, vx, vy;
     int i, moving, li;
     int pi;
-    if (canvas_key_pressed(c, KEY_ESCAPE) || canvas_key_pressed(c, KEY_Q))
-        canvas_quit(c);
+    if (g->quit_ask) {
+        float mx = (float)canvas_mouse_x(c), my = (float)canvas_mouse_y(c);
+        float stay_x, quit_x, by;
+        int click = canvas_mouse_pressed(c, 1);
+
+        quit_btns(canvas_width(c), canvas_height(c), &stay_x, &quit_x, &by);
+        if (canvas_key_pressed(c, KEY_ESCAPE) || canvas_key_pressed(c, KEY_Q) ||
+            canvas_key_pressed(c, KEY_Y) || canvas_key_pressed(c, KEY_ENTER) ||
+            (click && hit_rect(mx, my, quit_x, by, QUIT_BW, QUIT_BH)))
+            canvas_quit(c);
+        else if (canvas_key_pressed(c, KEY_N) ||
+                 (click && hit_rect(mx, my, stay_x, by, QUIT_BW, QUIT_BH)))
+            g->quit_ask = 0;
+        canvas_cam_follow(c, g->spr.x - canvas_width(c) / (2.0f * canvas_cam_zoom_get(c)),
+                          g->spr.y - canvas_height(c) / (2.0f * canvas_cam_zoom_get(c)), 4.8f);
+        return;
+    }
+    if (canvas_key_pressed(c, KEY_ESCAPE) || canvas_key_pressed(c, KEY_Q)) {
+        g->quit_ask = 1;
+        return;
+    }
     crypt_bind();
     if (canvas_key_pressed(c, KEY_I) || canvas_key_pressed(c, KEY_TAB) || canvas_key_pressed(c, KEY_C))
         g->ui = (g->ui == UI_INV) ? UI_NONE : UI_INV;
-    if (canvas_key_pressed(c, KEY_1) && drink_kind(g, IT_HPOT))
-        canvas_sound_play(c, g->snd_drink, 0.6f);
-    if (canvas_key_pressed(c, KEY_2) && drink_kind(g, IT_MPOT))
-        canvas_sound_play(c, g->snd_drink, 0.6f);
+    if (!g->dead) {
+        static const CanvasKey kbar[RPG_BAR_N] = { KEY_1, KEY_2, KEY_3, KEY_4, KEY_5 };
+        for (i = 0; i < RPG_BAR_N; i++) {
+            if (canvas_key_pressed(c, kbar[i]))
+                fire_bar(g, c, i);
+        }
+    }
 
     canvas_screen_to_world(c, (float)canvas_mouse_x(c), (float)canvas_mouse_y(c), &wx, &wy);
     g->hover_loot = loot_at(g, wx, wy);
@@ -831,8 +1009,65 @@ static void update(void *state, Canvas *c, float dt)
             refresh(g);
         }
         canvas_cam_follow(c, g->spr.x - canvas_width(c) / (2.0f * canvas_cam_zoom_get(c)),
-                          g->spr.y - canvas_height(c) / (2.0f * canvas_cam_zoom_get(c)), 7.0f);
+                          g->spr.y - canvas_height(c) / (2.0f * canvas_cam_zoom_get(c)), 4.8f);
         return;
+    }
+
+    {
+        float mx = (float)canvas_mouse_x(c), my = (float)canvas_mouse_y(c);
+        int W = canvas_width(c), H = canvas_height(c), bslot = -1, gi, si;
+        float px, py, bagx, bagy, bookx, booky;
+        RpgBarSlot pay;
+
+        sheet_origin(W, H, &px, &py);
+        bagx = px + 250.0f;
+        bagy = py + 48.0f;
+        book_origin(px, py, &bookx, &booky);
+        if (canvas_mouse_pressed(c, 2) && bar_hit(W, H, mx, my, &bslot))
+            rpg_bar_unbind(&g->pc.bar, bslot);
+        if (canvas_mouse_pressed(c, 1) && !g->drag_src) {
+            if (bar_hit(W, H, mx, my, &bslot) && g->pc.bar.slot[bslot].type != RPG_BAR_EMPTY)
+                drag_begin(g, DRAG_BAR, bslot, mx, my);
+            else if (g->ui == UI_INV && inv_hit_grid(mx, my, bagx, bagy, &gi) &&
+                     rpg_item_ok(&g->pc.inv.grid[gi]))
+                drag_begin(g, DRAG_BAG, gi, mx, my);
+            else if (g->ui == UI_INV && book_hit(mx, my, bookx, booky, &si) && rpg_book_id(&g->pc.build.skills, si))
+                drag_begin(g, DRAG_BOOK, si, mx, my);
+        }
+        if (g->drag_src && canvas_mouse_down(c, 1) &&
+            dist2(mx, my, g->drag_px, g->drag_py) > 64.0f)
+            g->drag_live = 1;
+        if (g->drag_src && !canvas_mouse_down(c, 1)) {
+            int over = bar_hit(W, H, mx, my, &bslot);
+            int got = drag_payload(g, &pay);
+
+            if (over && g->drag_src == DRAG_BAR) {
+                if (g->drag_live)
+                    rpg_bar_swap(&g->pc.bar, g->drag_i, bslot);
+                else if (bslot == g->drag_i)
+                    fire_bar(g, c, bslot);
+            } else if (over && got)
+                rpg_hero_bar_put(&g->pc, bslot, pay.type, pay.id);
+            else if (!over && g->drag_src == DRAG_BAR && g->drag_live)
+                rpg_bar_unbind(&g->pc.bar, g->drag_i);
+            else if (!over && g->drag_src == DRAG_BAG && !g->drag_live) {
+                RpgItem *it = &g->pc.inv.grid[g->drag_i];
+                if (it->flags & RPG_IF_USE) {
+                    if (rpg_use(&g->pc, it)) {
+                        canvas_sound_play(c, g->snd_drink, 0.6f);
+                        say(g, c, "Drank a potion");
+                    }
+                    sync_hp(g);
+                } else if (rpg_item_ok(it)) {
+                    if (rpg_equip(&g->pc.inv, g->drag_i) == 0) {
+                        say(g, c, "Equipped");
+                        refresh(g);
+                    }
+                }
+            }
+            g->drag_src = DRAG_NONE;
+            g->drag_live = 0;
+        }
     }
 
     vx = vy = 0;
@@ -851,12 +1086,16 @@ static void update(void *state, Canvas *c, float dt)
                 vy *= 0.7071f;
             }
             g->has_dest = 1;
-            g->dest_x = g->spr.x + vx * 48.0f;
-            g->dest_y = g->spr.y + vy * 48.0f;
+            g->dest_x = g->spr.x + vx * 72.0f;
+            g->dest_y = g->spr.y + vy * 72.0f;
             g->target = -1;
         }
-        if (canvas_mouse_pressed(c, 1)) {
-            if (g->hover_mob >= 0) {
+        if (canvas_mouse_pressed(c, 1) && !g->drag_src) {
+            int bslot;
+            if (bar_hit(canvas_width(c), canvas_height(c), (float)canvas_mouse_x(c), (float)canvas_mouse_y(c),
+                        &bslot)) {
+                /* click is for the hotbar, not the world */
+            } else if (g->hover_mob >= 0) {
                 g->loot_want = -1;
                 g->target = g->hover_mob;
                 g->has_dest = 1;
@@ -882,8 +1121,12 @@ static void update(void *state, Canvas *c, float dt)
                 g->dest_y = wy;
             }
         }
-        if (canvas_mouse_pressed(c, 2) && g->hover_loot >= 0)
-            take_loot(g, c, g->hover_loot);
+        if (canvas_mouse_pressed(c, 2) && g->hover_loot >= 0 && !g->drag_src) {
+            int bslot;
+            if (!bar_hit(canvas_width(c), canvas_height(c), (float)canvas_mouse_x(c), (float)canvas_mouse_y(c),
+                         &bslot))
+                take_loot(g, c, g->hover_loot);
+        }
         if (canvas_key_pressed(c, KEY_SPACE)) {
             li = loot_at(g, g->spr.x, g->spr.y);
             if (li >= 0 && dist2(g->spr.x, g->spr.y, g->ground.pile[li].x, g->ground.pile[li].y) < LOOT_TAKE * LOOT_TAKE)
@@ -901,27 +1144,11 @@ static void update(void *state, Canvas *c, float dt)
         float mx = (float)canvas_mouse_x(c), my = (float)canvas_mouse_y(c);
 
         if (canvas_mouse_pressed(c, 1) && g->ui == UI_INV) {
-            float px, py, bagx, bagy;
+            float px, py;
             sheet_origin(canvas_width(c), canvas_height(c), &px, &py);
-            bagx = px + 250.0f;
-            bagy = py + 48.0f;
             if (hit_wear(mx, my, px, py, &slot)) {
                 rpg_unequip(&g->pc.inv, slot);
                 refresh(g);
-            } else if (inv_hit_grid(mx, my, bagx, bagy, &gi)) {
-                RpgItem *it = &g->pc.inv.grid[gi];
-                if (it->flags & RPG_IF_USE) {
-                    if (rpg_use(&g->pc, it)) {
-                        canvas_sound_play(c, g->snd_drink, 0.6f);
-                        say(g, c, "Drank a potion");
-                    }
-                    sync_hp(g);
-                } else if (rpg_item_ok(it)) {
-                    if (rpg_equip(&g->pc.inv, gi) == 0) {
-                        say(g, c, "Equipped");
-                        refresh(g);
-                    }
-                }
             }
         } else if (canvas_mouse_pressed(c, 1) && g->ui == UI_VENDOR) {
             ox = (float)canvas_width(c) * 0.5f - 180.0f;
@@ -957,17 +1184,23 @@ static void update(void *state, Canvas *c, float dt)
     if (g->note_t > 0.0f)
         g->note_t -= dt;
 
-    moving = g->has_dest && (g->spr.vx != 0 || g->spr.vy != 0);
-    g->spr.fps = moving ? 10.0f : 0.0f;
-    if (!moving)
+    moving = g->has_dest && (g->spr.vx * g->spr.vx + g->spr.vy * g->spr.vy) > 64.0f;
+    g->spr.fps = 0.0f;
+    if (moving && g->spr.frames > 1)
+        g->spr.frame = (int)(g->walk_gait * (float)g->spr.frames) % g->spr.frames;
+    else {
         g->spr.frame = 0;
+        if (!moving)
+            g->walk_gait = 0.0f;
+    }
     if (moving) {
-        g->step_t -= dt;
-        if (g->step_t <= 0.0f) {
-            canvas_sound_play(c, g->snd_step, 0.28f);
-            g->step_t = 0.24f;
+        int beat = (int)(g->walk_gait * 2.0f);
+        if (beat != g->walk_beat) {
+            g->walk_beat = beat;
+            canvas_sound_play(c, g->snd_step, 0.24f);
         }
     } else {
+        g->walk_beat = -1;
         g->step_t = 0.0f;
     }
     /* Position already moved in dungeon_slide; sprite_update would apply vx again. */
@@ -995,7 +1228,7 @@ static void update(void *state, Canvas *c, float dt)
         canvas_cam_zoom(c, clampf(z, 0.7f, 2.2f));
     }
     canvas_cam_follow(c, g->spr.x - canvas_width(c) / (2.0f * canvas_cam_zoom_get(c)),
-                      g->spr.y - canvas_height(c) / (2.0f * canvas_cam_zoom_get(c)), 7.0f);
+                      g->spr.y - canvas_height(c) / (2.0f * canvas_cam_zoom_get(c)), 4.8f);
 }
 
 static int item_icon(const RpgItem *it)
@@ -1175,37 +1408,53 @@ static void render_world(Arpg *g, Canvas *c)
         }
     }
     for (i = 0; i < g->mob_n; i++) {
-        float w, h, r, gg, b;
-        if (!g->mobs[i].alive)
+        float w, h, r, gg, b, bob, lean, lx, ly, step;
+        RpgActor *m = &g->mobs[i];
+        if (!m->alive)
             continue;
-        sp = &crypt_species[g->mobs[i].species];
+        sp = &crypt_species[m->kind];
         w = sp->radius * 1.6f;
         h = sp->radius * 2.1f;
         r = sp->r;
         gg = sp->g;
         b = sp->b;
-        if (g->mobs[i].hurt > 0.0f) {
+        if (m->hurt > 0.0f) {
             r = 1.0f;
             gg = 1.0f;
             b = 1.0f;
         }
-        canvas_fill_rect(c, g->mobs[i].x - w * 0.5f, g->mobs[i].y - h, w, h, r, gg, b, 1.0f);
-        if (g->mobs[i].champ)
-            canvas_stroke_rect(c, g->mobs[i].x - w * 0.5f - 2, g->mobs[i].y - h - 2, w + 4, h + 4, 1.0f, 0.82f, 0.2f,
-                               1.0f);
+        bob = m->ai == RPG_AI_CHASE || m->ai == RPG_AI_FLEE ? gait_bob(m->gait) * 2.2f : 0.0f;
+        lean = (float)(m->face ? m->face : 1) * (m->vx != 0.0f || m->vy != 0.0f ? 2.4f : 0.0f);
+        lx = m->x - w * 0.5f + lean;
+        ly = m->y - h - bob;
+        canvas_fill_rect(c, m->x - w * 0.32f, m->y - 3.0f, w * 0.64f, 4.0f, 0, 0, 0, 0.32f);
+        canvas_fill_rect(c, lx, ly, w, h, r, gg, b, 1.0f);
+        if (m->vx != 0.0f || m->vy != 0.0f) {
+            step = m->gait < 0.5f ? -1.0f : 1.0f;
+            canvas_fill_rect(c, m->x + step * (w * 0.22f) - 2.0f, m->y - 7.0f + bob * 0.25f, 5.0f, 8.0f,
+                             r * 0.55f, gg * 0.55f, b * 0.55f, 1.0f);
+        }
+        if (m->role == RPG_ROLE_BOSS)
+            canvas_stroke_rect(c, lx - 3, ly - 3, w + 6, h + 6, 0.95f, 0.45f, 0.12f, 1.0f);
+        else if (m->role == RPG_ROLE_CHAMPION)
+            canvas_stroke_rect(c, lx - 2, ly - 2, w + 4, h + 4, 1.0f, 0.82f, 0.2f, 1.0f);
         if (g->target == i)
-            canvas_stroke_rect(c, g->mobs[i].x - w * 0.5f - 1, g->mobs[i].y - h - 1, w + 2, h + 2, 0.9f, 0.2f, 0.15f,
-                               1.0f);
+            canvas_stroke_rect(c, lx - 1, ly - 1, w + 2, h + 2, 0.9f, 0.2f, 0.15f, 1.0f);
         {
-            float hp = rpg_get(&g->mobs[i].st, ST_HPMAX)
-                           ? (float)rpg_get(&g->mobs[i].st, ST_HP) / (float)rpg_get(&g->mobs[i].st, ST_HPMAX)
+            float hp = rpg_get(&m->st, ST_HPMAX)
+                           ? (float)rpg_get(&m->st, ST_HP) / (float)rpg_get(&m->st, ST_HPMAX)
                            : 0;
-            canvas_fill_rect(c, g->mobs[i].x - 12, g->mobs[i].y - h - 6, 24, 3, 0.15f, 0.05f, 0.05f, 0.9f);
-            canvas_fill_rect(c, g->mobs[i].x - 12, g->mobs[i].y - h - 6, 24.0f * clampf(hp, 0, 1), 3, 0.75f, 0.12f,
-                             0.1f, 1.0f);
+            canvas_fill_rect(c, m->x - 12, ly - 6, 24, 3, 0.15f, 0.05f, 0.05f, 0.9f);
+            canvas_fill_rect(c, m->x - 12, ly - 6, 24.0f * clampf(hp, 0, 1), 3, 0.75f, 0.12f, 0.1f, 1.0f);
         }
     }
-    canvas_draw_sprite(c, &g->spr);
+    {
+        Sprite vis = g->spr;
+        float bob = (g->spr.vx != 0.0f || g->spr.vy != 0.0f) ? gait_bob(g->walk_gait) * 1.7f : 0.0f;
+        vis.y -= bob;
+        vis.scale_y = (g->spr.vx != 0.0f || g->spr.vy != 0.0f) ? 1.0f + gait_bob(g->walk_gait) * 0.045f : 1.0f;
+        canvas_draw_sprite(c, &vis);
+    }
     if (g->has_dest)
         canvas_stroke_rect(c, g->dest_x - 4, g->dest_y - 4, 8, 8, 0.9f, 0.85f, 0.4f, 0.7f);
     for (i = 0; i < FX_MAX; i++) {
@@ -1264,11 +1513,48 @@ static void render_hud(Arpg *g, Canvas *c)
         bar(c, 12, (float)H - 38, 240, 14, mp, 0.25f, 0.45f, 0.95f, mp_s);
         bar(c, 12, (float)H - 20, 240, 10, xp, 0.82f, 0.70f, 0.18f, xp_s);
     }
+    {
+        float bx, by, sx;
+        int i, gi, nstk, hi;
+        RpgItem it;
+        RpgBarSlot *s;
+        char n[12];
+
+        bar_origin(W, H, &bx, &by);
+        canvas_fill_rect(c, bx - 8, by - 10, RPG_BAR_N * (BAR_CELL + BAR_GAP) - BAR_GAP + 16, BAR_CELL + 24, 0.04f,
+                         0.03f, 0.03f, 0.78f);
+        for (i = 0; i < RPG_BAR_N; i++) {
+            sx = bx + (float)i * (BAR_CELL + BAR_GAP);
+            s = &g->pc.bar.slot[i];
+            canvas_fill_rect(c, sx, by, BAR_CELL, BAR_CELL, 0.13f, 0.12f, 0.11f, 0.94f);
+            hi = hit_rect((float)mx, (float)my, sx, by, BAR_CELL, BAR_CELL);
+            canvas_stroke_rect(c, sx, by, BAR_CELL, BAR_CELL, hi ? 0.95f : 0.48f, hi ? 0.82f : 0.4f, hi ? 0.4f : 0.28f,
+                               1.0f);
+            memset(&it, 0, sizeof(it));
+            if (s->type == RPG_BAR_ITEM) {
+                gi = rpg_inv_find(&g->pc.inv, s->id);
+                nstk = rpg_inv_count(&g->pc.inv, s->id);
+                if (gi >= 0)
+                    it = g->pc.inv.grid[gi];
+                else
+                    it.kind = s->id;
+                draw_item_swatch(c, g, &it, sx + 3, by + 3, BAR_CELL - 6);
+                if (nstk > 1) {
+                    snprintf(n, sizeof(n), "%d", nstk);
+                    canvas_draw_text(c, sx + 22, by + BAR_CELL - 3, n, 1, 1, 1);
+                } else if (nstk == 0)
+                    canvas_fill_rect(c, sx, by, BAR_CELL, BAR_CELL, 0, 0, 0, 0.35f);
+            } else if (s->type == RPG_BAR_SKILL) {
+                draw_skill_mark(c, sx + 3, by + 3, BAR_CELL - 6);
+            }
+            snprintf(n, sizeof(n), "%d", i + 1);
+            canvas_draw_text(c, sx + 3, by + 11, n, 0.9f, 0.85f, 0.7f);
+        }
+    }
     snprintf(line, sizeof(line), "%d-%d dmg   armor %d   STR %d  DEX %d  MAG %d  VIT %d", LS(g, ST_DMIN),
              LS(g, ST_DMAX), LS(g, ST_ARMOR), LS(g, ST_STR), LS(g, ST_DEX), LS(g, ST_MAG), LS(g, ST_VIT));
-    canvas_draw_text(c, 262, (float)H - 28, line, 0.85f, 0.85f, 0.8f);
-    canvas_draw_text(c, 262, (float)H - 12, "I or C character & bag   click loot to take   Space use", 0.55f, 0.55f,
-                     0.5f);
+    canvas_draw_text(c, 520, (float)H - 28, line, 0.85f, 0.85f, 0.8f);
+    canvas_draw_text(c, 520, (float)H - 12, "1-5 use   I bag   drag onto 1-5", 0.55f, 0.55f, 0.5f);
     if (g->note_t > 0.0f)
         canvas_draw_text(c, (float)W * 0.5f - 80, (float)H - 72, g->note, 0.95f, 0.9f, 0.55f);
     {
@@ -1325,9 +1611,10 @@ static void render_hud(Arpg *g, Canvas *c)
         }
         canvas_draw_text(c, (float)mx + 14, (float)my - 8, line, r, gg, b);
     } else if (g->hover_mob >= 0 && g->mobs[g->hover_mob].alive) {
-        Mob *m = &g->mobs[g->hover_mob];
-        snprintf(line, sizeof(line), "%s%s  %d/%d", m->champ ? "Champion " : "", crypt_species[m->species].name,
-                 MS(m, ST_HP), MS(m, ST_HPMAX));
+        RpgActor *m = &g->mobs[g->hover_mob];
+        const char *role = rpg_role_name(m->role);
+        snprintf(line, sizeof(line), "%s%s%s  %d/%d", role[0] ? role : "", role[0] ? " " : "",
+                 crypt_species[m->kind].name, MS(m, ST_HP), MS(m, ST_HPMAX));
         canvas_draw_text(c, (float)mx + 14, (float)my - 8, line, 0.95f, 0.55f, 0.45f);
     } else if (g->hover_place >= 0) {
         RpgPlace *p = &g->world.places[g->world.zone][g->hover_place];
@@ -1335,16 +1622,17 @@ static void render_hud(Arpg *g, Canvas *c)
     }
 
     if (g->ui == UI_INV) {
-        float px, py, bagx, bagy, sx, sy;
-        int i, slot, gi;
+        float px, py, bagx, bagy, bookx, booky, sx, sy;
+        int i, slot, gi, si;
 
         sheet_origin(W, H, &px, &py);
         bagx = px + 250.0f;
         bagy = py + 48.0f;
-        canvas_fill_rect(c, px - 16, py - 16, 660, 360, 0.06f, 0.05f, 0.04f, 0.94f);
-        canvas_stroke_rect(c, px - 16, py - 16, 660, 360, 0.55f, 0.42f, 0.22f, 1.0f);
+        book_origin(px, py, &bookx, &booky);
+        canvas_fill_rect(c, px - 16, py - 16, 660, 400, 0.06f, 0.05f, 0.04f, 0.94f);
+        canvas_stroke_rect(c, px - 16, py - 16, 660, 400, 0.55f, 0.42f, 0.22f, 1.0f);
         canvas_draw_text(c, px, py - 2, "Character", 0.92f, 0.85f, 0.55f);
-        canvas_draw_text(c, bagx, py - 2, "Bag    click an item to wear or drink", 0.92f, 0.85f, 0.55f);
+        canvas_draw_text(c, bagx, py - 2, "Bag    click to use    drag to 1-5", 0.92f, 0.85f, 0.55f);
         snprintf(line, sizeof(line), "Lv %d   STR %d  DEX %d  MAG %d  VIT %d", LS(g, ST_LV), LS(g, ST_STR), LS(g, ST_DEX),
                  LS(g, ST_MAG), LS(g, ST_VIT));
         canvas_draw_text(c, px, py + 20, line, 0.82f, 0.8f, 0.72f);
@@ -1369,16 +1657,30 @@ static void render_hud(Arpg *g, Canvas *c)
                 canvas_draw_text(c, sx + 18, sy + 30, line, 1, 1, 1);
             }
         }
+        canvas_draw_text(c, bookx, booky - 16,
+                         rpg_book_n(&g->pc.build.skills) ? "Spells    drag to 1-5" : "Spells    none yet    drag to 1-5 later",
+                         0.92f, 0.85f, 0.55f);
+        for (i = 0; i < BOOK_W * BOOK_H; i++) {
+            int col = i % BOOK_W, row = i / BOOK_W;
+            sx = bookx + col * BAG_CELL;
+            sy = booky + row * BAG_CELL;
+            canvas_fill_rect(c, sx, sy, 34, 34, 0.12f, 0.11f, 0.14f, 0.9f);
+            canvas_stroke_rect(c, sx, sy, 34, 34, 0.32f, 0.28f, 0.4f, 0.8f);
+            if (rpg_book_id(&g->pc.build.skills, i))
+                draw_skill_mark(c, sx, sy, 34);
+        }
         {
             float r, gg, b;
             if (hit_wear((float)mx, (float)my, px, py, &slot) && rpg_item_ok(&g->pc.inv.wear[slot])) {
                 rarity_rgb(g->pc.inv.wear[slot].rarity, &r, &gg, &b);
                 rpg_item_desc(&g->pc.inv.wear[slot], line, sizeof(line));
-                canvas_draw_text(c, px, py + 320, line, r, gg, b);
+                canvas_draw_text(c, px, py + 360, line, r, gg, b);
             } else if (inv_hit_grid((float)mx, (float)my, bagx, bagy, &gi) && rpg_item_ok(&g->pc.inv.grid[gi])) {
                 rarity_rgb(g->pc.inv.grid[gi].rarity, &r, &gg, &b);
                 rpg_item_desc(&g->pc.inv.grid[gi], line, sizeof(line));
-                canvas_draw_text(c, px, py + 320, line, r, gg, b);
+                canvas_draw_text(c, px, py + 360, line, r, gg, b);
+            } else if (book_hit((float)mx, (float)my, bookx, booky, &si) && rpg_book_id(&g->pc.build.skills, si)) {
+                canvas_draw_text(c, px, py + 360, "Spell    drag onto 1-5", 0.72f, 0.62f, 0.88f);
             }
         }
     }
@@ -1439,6 +1741,54 @@ static void render_hud(Arpg *g, Canvas *c)
         canvas_draw_text(c, (float)W * 0.5f - 90, (float)H * 0.5f, "You have died", 0.95f, 0.75f, 0.7f);
         canvas_draw_text(c, (float)W * 0.5f - 140, (float)H * 0.5f + 22, "click or R — revive in Haven (-10% gold)",
                          0.8f, 0.7f, 0.65f);
+    }
+    if (g->quit_ask) {
+        float x, y, w, h, stay_x, quit_x, by;
+
+        quit_panel(W, H, &x, &y, &w, &h);
+        quit_btns(W, H, &stay_x, &quit_x, &by);
+        canvas_fill_rect(c, 0, 0, (float)W, (float)H, 0, 0, 0, 0.45f);
+        canvas_fill_rect(c, x, y, w, h, 0.08f, 0.07f, 0.06f, 0.96f);
+        canvas_stroke_rect(c, x, y, w, h, 0.55f, 0.42f, 0.22f, 1.0f);
+        canvas_draw_text(c, x + 28, y + 28, "Quit Crypt?", 0.95f, 0.9f, 0.7f);
+        canvas_draw_text(c, x + 28, y + 48, "Esc again or Y quits.  N stays.", 0.65f, 0.62f, 0.55f);
+        canvas_fill_rect(c, stay_x, by, QUIT_BW, QUIT_BH, 0.18f, 0.18f, 0.16f, 1.0f);
+        canvas_fill_rect(c, quit_x, by, QUIT_BW, QUIT_BH, 0.42f, 0.16f, 0.12f, 1.0f);
+        if (hit_rect((float)mx, (float)my, stay_x, by, QUIT_BW, QUIT_BH))
+            canvas_stroke_rect(c, stay_x, by, QUIT_BW, QUIT_BH, 0.9f, 0.85f, 0.55f, 1.0f);
+        else
+            canvas_stroke_rect(c, stay_x, by, QUIT_BW, QUIT_BH, 0.4f, 0.38f, 0.32f, 1.0f);
+        if (hit_rect((float)mx, (float)my, quit_x, by, QUIT_BW, QUIT_BH))
+            canvas_stroke_rect(c, quit_x, by, QUIT_BW, QUIT_BH, 0.95f, 0.55f, 0.4f, 1.0f);
+        else
+            canvas_stroke_rect(c, quit_x, by, QUIT_BW, QUIT_BH, 0.7f, 0.28f, 0.2f, 1.0f);
+        canvas_draw_text(c, stay_x + 32, by + 20, "Stay", 0.9f, 0.9f, 0.88f);
+        canvas_draw_text(c, quit_x + 32, by + 20, "Quit", 0.95f, 0.85f, 0.8f);
+    }
+    if (g->drag_live) {
+        RpgItem ghost;
+        RpgBarSlot pay;
+
+        memset(&ghost, 0, sizeof(ghost));
+        if (drag_payload(g, &pay) && pay.type == RPG_BAR_SKILL)
+            draw_skill_mark(c, (float)mx - 18.0f, (float)my - 18.0f, 36.0f);
+        else {
+            if (g->drag_src == DRAG_BAG && g->drag_i >= 0 && g->drag_i < rpg_inv_n())
+                ghost = g->pc.inv.grid[g->drag_i];
+            else if (g->drag_src == DRAG_BAR && g->drag_i >= 0 && g->drag_i < RPG_BAR_N) {
+                RpgBarSlot *s = &g->pc.bar.slot[g->drag_i];
+                int gi;
+                if (s->type == RPG_BAR_ITEM) {
+                    gi = rpg_inv_find(&g->pc.inv, s->id);
+                    if (gi >= 0)
+                        ghost = g->pc.inv.grid[gi];
+                    else
+                        ghost.kind = s->id;
+                }
+            }
+            if (rpg_item_ok(&ghost) || ghost.kind)
+                draw_item_swatch(c, g, &ghost, (float)mx - 18.0f, (float)my - 18.0f, 36.0f);
+        }
     }
     canvas_end_hud(c);
 }

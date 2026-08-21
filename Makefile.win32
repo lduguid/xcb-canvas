@@ -19,7 +19,7 @@ HOST_SRC = src/canvas_host.c
 HOST_DEFS = -DCANVAS_TAG=\"$(TAG)\"
 ENGINE_LIB = canvas$(TAG)
 TOOLSET_STAMP = .hot/toolset-$(TOOLSET)$(TAG)
-ARPG_SRC = games/arpg.c games/crypt.c games/crypt_tune.c rpg/rpg.c rpg/dungeon.c rpg/world.c rpg/loot.c
+ARPG_SRC = games/arpg.c games/crypt.c games/crypt_tune.c rpg/rpg.c rpg/dungeon.c rpg/world.c rpg/loot.c rpg/path.c rpg/actor.c
 
 # Must be set before any rule: the stamp recipe used to be first, so
 # `make -f Makefile.win32` only touched .hot/toolset-* and built nothing.
@@ -101,7 +101,7 @@ vector$(TAG).dll: games/vector.c $(ENGINE) include/canvas.h
 crate$(TAG).dll: games/crate.c $(ENGINE) include/canvas.h
 	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD games/crate.c -Fecrate$(TAG).dll -link $(ENGINE_LIB).lib
 
-arpg$(TAG).dll: $(ARPG_SRC) $(ENGINE) include/canvas.h rpg/rpg.h rpg/dungeon.h rpg/world.h rpg/loot.h games/crypt.h games/crypt_tune.h
+arpg$(TAG).dll: $(ARPG_SRC) $(ENGINE) include/canvas.h rpg/rpg.h rpg/dungeon.h rpg/world.h rpg/loot.h rpg/path.h rpg/actor.h games/crypt.h games/crypt_tune.h
 	$(CL) $(CLFLAGS) -DCANVAS_PLUGIN -LD $(ARPG_SRC) -Fearpg$(TAG).dll -link $(ENGINE_LIB).lib
 
 else
