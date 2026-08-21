@@ -84,7 +84,7 @@ int dungeon_astar(const Dungeon *d, int sx, int sy, int gx, int gy, unsigned cha
             ny = cy + diry[i];
             if (!dungeon_walk(d, nx, ny) || closed[ny][nx])
                 continue;
-            ng = gscore[cy][cx] + 1;
+            ng = gscore[cy][cx] + dungeon_step_cost(d, nx, ny);
             if (ng >= gscore[ny][nx])
                 continue;
             gscore[ny][nx] = ng;

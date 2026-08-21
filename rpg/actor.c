@@ -78,7 +78,7 @@ static void chase_move(RpgActor *a, const Dungeon *d, float hx, float hy, float 
     int sx, sy, gx, gy, rebuild;
 
     rad = a->radius > 1.0f ? a->radius * 0.6f : 6.0f;
-    budget = a->speed * dt;
+    budget = a->speed * dt * dungeon_speed_at(d, a->x, a->y);
     dx = hx - a->x;
     dy = hy - a->y;
     len = sqrtf(dx * dx + dy * dy);
@@ -162,7 +162,9 @@ RpgAiResult rpg_ai_step(RpgActor *a, const Dungeon *d, float hx, float hy, float
             a->ai = RPG_AI_IDLE;
             reset_path(a);
         } else if (len > 1.0f) {
-            dungeon_slide(d, &a->x, &a->y, -dx / len * a->speed * dt, -dy / len * a->speed * dt,
+            dungeon_slide(d, &a->x, &a->y,
+                          -dx / len * a->speed * dt * dungeon_speed_at(d, a->x, a->y),
+                          -dy / len * a->speed * dt * dungeon_speed_at(d, a->x, a->y),
                           a->radius > 1.0f ? a->radius * 0.6f : 6.0f);
         }
         rpg_actor_note_move(a, ox, oy, dt);

@@ -27,8 +27,24 @@ enum {
     ST_GOLD,
     ST_LIFE,
     ST_MANA,
+    ST_HIT,
+    ST_DODGE,
+    ST_PARRY,
+    ST_BLOCK,
+    ST_BLKAMT,
+    ST_CRIT,
+    ST_CRITDMG,
+    ST_ASPD,
+    ST_PEN,
+    ST_RPHYS,
+    ST_RFIRE,
+    ST_RCOLD,
+    ST_RLIT,
+    ST_RPOIS,
     ST_N
 };
+
+enum { DT_PHYS = 1, DT_FIRE, DT_COLD, DT_LIT, DT_POIS };
 
 enum { SL_WEP = 0, SL_OFF, SL_HELM, SL_ARM, SL_RING, SL_N };
 
@@ -44,10 +60,13 @@ enum {
 
 enum { CRYPT_AB_NONE = 0, CRYPT_AB_SLAM };
 
+enum { CRYPT_LAVA = 2, CRYPT_MUD = 3, CRYPT_ICE = 4 };
+
 extern const RpgRules crypt_rules;
 
 void crypt_bind(void);
 void crypt_world_init(RpgWorld *w, unsigned seed);
+void crypt_paint_terrain(Dungeon *d, int zone, int depth);
 void crypt_kit(RpgHero *pc);
 RpgItem crypt_potion(int life);
 RpgItem crypt_roll_gear(int depth);
@@ -58,5 +77,6 @@ void crypt_actor_refresh(RpgActor *a);
 int crypt_roll_species(int depth);
 int crypt_boss_species(void);
 const char *crypt_zone_title(const RpgWorld *w);
+float crypt_swing_period(const RpgStats *s);
 
 #endif

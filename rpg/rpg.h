@@ -2,9 +2,10 @@
 #define RPG_H
 
 /* ARPG engine API. Manages stats, items, bags, equipment, gold, XP,
- * action bar, class/skill/talent builds, and ground loot as abstract
- * systems. A game binds RpgRules with its own stat list, item kinds,
- * class/skill/talent catalogs, slot names, formulas, and generators. */
+ * action bar, class/skill/talent builds, combat resolution, and ground
+ * loot as abstract systems. A game binds RpgRules with its own stat
+ * list, item kinds, class/skill/talent catalogs, combat scripts, slot
+ * names, formulas, and generators. */
 
 #include <stddef.h>
 
@@ -126,6 +127,75 @@ typedef struct {
     RpgItem item;
 } RpgDrop;
 
+/* Combat styles are engine-level. Damage type ids are game-defined (0 = none). */
+enum { RPG_STYLE_MELEE = 0, RPG_STYLE_SPELL };
+
+enum {
+    RPG_HIT_NONE = 0,
+    RPG_HIT_MISS,
+    RPG_HIT_DODGE,
+    RPG_HIT_PARRY,
+    RPG_HIT_BLOCK, /* connected; damage already reduced */
+    RPG_HIT_HIT
+};
+
+enum {
+    RPG_AF_CANT_DODGE = 1 << 0,
+    RPG_AF_CANT_PARRY = 1 << 1,
+    RPG_AF_CANT_BLOCK = 1 << 2,
+    RPG_AF_ALWAYS_HIT = 1 << 3
+};
+
+typedef struct {
+    const RpgStats *atk;
+    const RpgStats *def;
+    int style;     /* RPG_STYLE_* */
+    int dtype;     /* game damage type */
+    int skill;     /* 0 = basic swing */
+    int power;     /* extra raw the game's roll_damage may add */
+    unsigned flags;
+} RpgAttack;
+
+typedef struct {
+    int outcome;
+    int dmg;
+    int raw;
+    int mitigated;
+    int crit;
+    int dtype;
+} RpgHit;
+
+/* Game combat scripts. NULL skips that phase. Chance hooks return 0–100
+ * (or <0 to skip). Damage hooks return the new amount. */
+typedef struct {
+    int (*dodge)(const RpgAttack *a);
+    int (*parry)(const RpgAttack *a);
+    int (*to_hit)(const RpgAttack *a);
+    int (*block)(const RpgAttack *a);
+    int (*roll_damage)(const RpgAttack *a);
+    int (*crit_chance)(const RpgAttack *a);
+    int (*crit_apply)(const RpgAttack *a, int dmg);
+    int (*block_apply)(const RpgAttack *a, int dmg);
+    int (*armor)(const RpgAttack *a, int dmg);
+    int (*resist)(const RpgAttack *a, int dmg);
+    int (*floor_dmg)(const RpgAttack *a, int dmg);
+} RpgCombat;
+
+enum {
+    RPG_TF_WALK = 1 << 0,
+    RPG_TF_BLOCK_LOS = 1 << 1,
+    RPG_TF_HAZARD = 1 << 2
+};
+
+/* Per tile-kind row. Index = dungeon tile id. cost 0 → 1. speed_pct 0 → 100. */
+typedef struct {
+    unsigned flags;
+    int cost;
+    int speed_pct;
+    int dtype;
+    int power;
+} RpgTerrain;
+
 typedef struct RpgRules {
     int stat_n;
     int inv_w, inv_h;
@@ -145,12 +215,16 @@ typedef struct RpgRules {
     int talent_n;
     int talent_per_level; /* added to unspent on each hero level; 0 = none */
 
+    const RpgTerrain *terrain;
+    int terrain_n;
+
     void (*fill_base)(RpgStats *base);
     void (*reset_derived)(RpgStats *live); /* before summing worn mods */
     void (*derive)(RpgStats *live);        /* after summing worn / build mods */
     void (*level_up)(RpgStats *base);
     int (*xp_to_next)(int level);
-    int (*melee)(const RpgStats *atk, const RpgStats *def, int *crit);
+    RpgCombat combat;
+    int (*melee)(const RpgStats *atk, const RpgStats *def, int *crit); /* fallback if combat unset */
     int (*item_value)(const RpgItem *it);
     int (*item_price)(const RpgItem *it);
     int (*use_item)(RpgStats *live, RpgItem *it);
@@ -164,6 +238,7 @@ int rpg_rng(int lo, int hi);
 
 void rpg_bind(const RpgRules *rules);
 const RpgRules *rpg_rules(void);
+const RpgTerrain *rpg_terrain(int kind);
 
 int rpg_get(const RpgStats *s, int id);
 void rpg_set(RpgStats *s, int id, int v);
@@ -184,6 +259,8 @@ int rpg_gain_xp(RpgStats *base, int xp);
 int rpg_hero_gain_xp(RpgHero *h, int xp); /* levels, talent pts, granted skills */
 int rpg_heal(RpgStats *live, int n);
 int rpg_mana(RpgStats *live, int n);
+int rpg_resolve(const RpgAttack *a, RpgHit *out);
+int rpg_hit_connected(const RpgHit *h);
 int rpg_melee(const RpgStats *atk, const RpgStats *def, int *crit);
 
 int rpg_item_ok(const RpgItem *it);

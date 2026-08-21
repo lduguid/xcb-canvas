@@ -10,7 +10,7 @@ Call `rpg_bind(&rules)` **every frame**. Do not copy rule function pointers onto
 
 | File | Role |
 |------|------|
-| `rpg.h` / `rpg.c` | Stats, items, bags, equipment, class/skill/talent build, 5-slot action bar, gold/XP, shop, melee *dispatch* |
+| `rpg.h` / `rpg.c` | Stats, items, bags, equipment, class/skill/talent build, 5-slot action bar, gold/XP, shop, combat *pipeline* |
 | `loot.h` / `loot.c` | Ground piles |
 | `world.h` / `world.c` | Town / overworld / dungeon graph, places, fog, vendor stock, bank stash |
 | `dungeon.h` / `dungeon.c` | 72×72 tile maps, generation, walk / slide / LOS |
@@ -25,8 +25,8 @@ Fill:
 
 - `stat_n`, `inv_w`, `inv_h`, `slot_n`, `max_level`, `slot_name[]`
 - Indices into `RpgStats.v` the engine uses: `hp`, `hp_max`, `mp`, `mp_max`, `gold`, `level`, `xp`, `xp_next` (`−1` = unused)
-- Callbacks: `fill_base`, `reset_derived`, `derive`, `level_up`, `xp_to_next`, `melee`, `item_value`, `item_price`, `use_item`, `describe`
-- Optional catalogs: `classes` / `class_n`, `skills` / `skill_n`, `talents` / `talent_n`, `talent_per_level`
+- Callbacks: `fill_base`, `reset_derived`, `derive`, `level_up`, `xp_to_next`, `combat` scripts (or fallback `melee`), `item_value`, `item_price`, `use_item`, `describe`
+- Optional catalogs: `classes` / `class_n`, `skills` / `skill_n`, `talents` / `talent_n`, `talent_per_level`, `terrain` / `terrain_n`
 - Optional `apply_build` — extra live-stat work after `derive`
 
 With no catalog (`class_n` / `skill_n` / `talent_n` = 0), the hero still stores class id, skill ids, talent ids, and unspent points. The engine does not gate or apply catalog mods until you publish tables.
@@ -56,7 +56,38 @@ If `base` HP (or MP) is `−1`, or both current and max are `0`, refresh fills c
 
 `rpg_hero_sync` copies live HP, MP, gold, XP, next, and level back onto `base`. Use it after potions or other live-only changes you want to keep.
 
-`rpg_heal` / `rpg_mana` bump live current, capped at max. `rpg_melee(atk, def, &crit)` only calls your `melee` callback.
+`rpg_heal` / `rpg_mana` bump live current, capped at max.
+
+## Combat
+
+The engine owns the **pipeline**. The game owns the **numbers and scripts**. Stats used in a swing (hit, dodge, armor, resist, …) are ordinary `RpgStats` slots the game defines. `rpg_resolve` never names DEX or fire.
+
+Fill `RpgRules.combat` with C callbacks (bound every frame, same as `derive`). NULL skips that phase.
+
+**`rpg_resolve(attack, &hit)` order**
+
+1. Dodge chance (skipped if `RPG_AF_CANT_DODGE`)
+2. Parry chance (melee typically; skipped if `RPG_AF_CANT_PARRY`)
+3. To-hit chance (fail → miss; skipped if `RPG_AF_ALWAYS_HIT`)
+4. Block chance — still a connect; `outcome` becomes `RPG_HIT_BLOCK`
+5. `roll_damage` — raw roll; `attack.power` is a hint the script may add
+6. Crit chance, then `crit_apply`
+7. `block_apply` if blocked
+8. `armor` (physical mitigation; a script can no-op on elemental `dtype`)
+9. `resist` (typed reduction)
+10. `floor_dmg` (or clamp at 0)
+
+Chance scripts return 0–100 (`< 0` skips). The engine rolls `1..100`. Damage scripts return the new amount.
+
+`RpgAttack`: attacker/defender stat bags, `style` (`RPG_STYLE_MELEE` / `SPELL`), game `dtype`, optional `skill` / `power` / `flags`.
+
+`RpgHit`: `outcome` (`MISS` / `DODGE` / `PARRY` / `BLOCK` / `HIT`), `dmg`, `raw`, `mitigated`, `crit`, `dtype`. `rpg_hit_connected` is true for HIT and BLOCK.
+
+`rpg_melee(atk, def, &crit)` is a thin melee resolve for callers that only want a damage int (`0` = avoided). Prefer `rpg_resolve` when the HUD should say Dodge vs Miss.
+
+If every combat hook is NULL, resolve falls back to the old single `melee` callback.
+
+Attack **period** is not inside `rpg_resolve`. Actors use `attack_reload`; the hero swing timer is the game’s (Crypt: `crypt_swing_period` from `ST_ASPD`).
 
 ## Hero
 
@@ -205,19 +236,21 @@ Places (`RpgPlace`): `kind`, tile `tx,ty`, optional `dest_zone` / `dest_id` / `d
 
 ## Dungeon and movement
 
-Maps are `DUN_W`×`DUN_H` (72×72). `DUN_WALL` `0`, `DUN_FLOOR` `1`. World units: `DUN_TILE` is **32**, regardless of PNG cell size. `dungeon_pos_tile` / `dungeon_tile_pos` convert (tile center = `(tx+0.5, ty+0.5) * 32`).
+Maps are `DUN_W`×`DUN_H` (72×72). `DUN_WALL` `0`, `DUN_FLOOR` `1`. Tile ids `2+` are game-defined. Bind a `RpgTerrain` row per id on `RpgRules.terrain` (`terrain_n` is the table length). World units: `DUN_TILE` is **32**, regardless of PNG cell size. `dungeon_pos_tile` / `dungeon_tile_pos` convert (tile center = `(tx+0.5, ty+0.5) * 32`).
 
-`dungeon_walk` — tile is in bounds and floor. `dungeon_blocked(x,y,rad)` — any of the four corners of the radius sits on a wall.
+`RpgTerrain`: `flags` (`RPG_TF_WALK`, `RPG_TF_BLOCK_LOS`, `RPG_TF_HAZARD`), A* `cost` (`0` → `1`), `speed_pct` (`0` → `100`, clamp 8–200), and hazard `dtype` / `power` for the game to feed `rpg_resolve`. Names, tints, and which tiles get stamped stay in the game. `rpg_terrain(kind)` looks up the bound row.
 
-**`dungeon_slide` is the only way positions should change.** It tries full `(dx,dy)`, then X only, then Y only. Heroes, clicks, and AI should all go through it so collision stays consistent.
+`dungeon_walk` — in bounds and walkable (`DUN_FLOOR`, or `RPG_TF_WALK`). `dungeon_opaque` — blocks LOS (`DUN_WALL` or `RPG_TF_BLOCK_LOS`). Walkable hazards do not block sight. `dungeon_blocked(x,y,rad)` — any of the four corners of the radius sits on a non-walkable tile. `dungeon_speed_at` / `dungeon_step_cost` read the tile under a point.
 
-`dungeon_line_clear` steps every 8 units with radius 4. `dungeon_gen(seed)` carves up to `DUN_ROOMS` (14) rooms, sets `start_*` to room 0 center and `stair_*` to the last room. It calls `rpg_seed(seed)` and therefore resets the global RNG.
+**`dungeon_slide` is the only way positions should change.** It tries full `(dx,dy)`, then X only, then Y only. Heroes, clicks, and AI should all go through it so collision stays consistent. Scale the step by `dungeon_speed_at` so mud/ice apply; the actor AI already does this.
 
-`dungeon_random_floor` / `dungeon_room_floor` pick spawn tiles.
+`dungeon_line_clear` steps every 8 units and rejects `dungeon_opaque` tiles. `dungeon_gen(seed)` carves up to `DUN_ROOMS` (14) rooms of `DUN_FLOOR`, sets `start_*` to room 0 center and `stair_*` to the last room. It calls `rpg_seed(seed)` and therefore resets the global RNG. Stamp extra tile kinds after gen.
+
+`dungeon_random_floor` / `dungeon_room_floor` pick spawn tiles (any walkable kind).
 
 ## Path
 
-`dungeon_astar(d, sx,sy, gx,gy, ox,oy, maxn)` writes waypoints **after** the start tile. Return value is the count (`0` if none). 4-connected, walkable tiles only. Hero click-to-move and mob chase can share it. Actors store their own path (`path_x/y`, `path_len`, `path_i`).
+`dungeon_astar(d, sx,sy, gx,gy, ox,oy, maxn)` writes waypoints **after** the start tile. Return value is the count (`0` if none). 4-connected, walkable tiles only; each step adds `dungeon_step_cost` so AI prefers around hazards. Hero click-to-move and mob chase can share it. Actors store their own path (`path_x/y`, `path_len`, `path_i`).
 
 ## Actors
 
@@ -259,7 +292,7 @@ Every step calls `rpg_actor_note_move`, which sets `vx,vy`, `face` (`±1`), and 
 - Name stats, items, classes, skills, talents, species
 - Draw, input, audio, HUD (bag, spellbook, hotbar, talent screen)
 - Cast when `rpg_bar_activate` returns `−1`
-- Apply melee/ability damage and VFX after `rpg_ai_step`
+- Combat scripts and which stats they read; apply HP and VFX from `RpgHit` after `rpg_ai_step`
 - Interpret places (open vendor, enter portal, …)
 - Choose tilesets; world size is always 32-unit tiles
 

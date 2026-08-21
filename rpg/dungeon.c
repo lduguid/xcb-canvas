@@ -9,11 +9,76 @@ static int in_map(int x, int y)
     return x >= 0 && y >= 0 && x < DUN_W && y < DUN_H;
 }
 
+int dungeon_get(const Dungeon *d, int tx, int ty)
+{
+    if (!d || !in_map(tx, ty))
+        return DUN_WALL;
+    return d->tile[ty][tx];
+}
+
 int dungeon_walk(const Dungeon *d, int tx, int ty)
 {
-    if (!in_map(tx, ty))
+    int kind;
+    const RpgTerrain *t;
+
+    if (!d || !in_map(tx, ty))
         return 0;
-    return d->tile[ty][tx] == DUN_FLOOR;
+    kind = d->tile[ty][tx];
+    if (kind == DUN_WALL)
+        return 0;
+    t = rpg_terrain(kind);
+    if (t)
+        return (t->flags & RPG_TF_WALK) != 0;
+    return kind != DUN_WALL;
+}
+
+int dungeon_opaque(const Dungeon *d, int tx, int ty)
+{
+    int kind;
+    const RpgTerrain *t;
+
+    if (!d || !in_map(tx, ty))
+        return 1;
+    kind = d->tile[ty][tx];
+    if (kind == DUN_WALL)
+        return 1;
+    t = rpg_terrain(kind);
+    if (t)
+        return (t->flags & RPG_TF_BLOCK_LOS) != 0;
+    return 0;
+}
+
+int dungeon_step_cost(const Dungeon *d, int tx, int ty)
+{
+    const RpgTerrain *t = rpg_terrain(dungeon_get(d, tx, ty));
+    int c;
+
+    if (!t || t->cost <= 0)
+        return 1;
+    c = t->cost;
+    if (c > 64)
+        c = 64;
+    return c;
+}
+
+float dungeon_speed_at(const Dungeon *d, float x, float y)
+{
+    int tx, ty;
+    const RpgTerrain *t;
+    int pct;
+
+    dungeon_pos_tile(x, y, &tx, &ty);
+    t = rpg_terrain(dungeon_get(d, tx, ty));
+    if (!t)
+        return 1.0f;
+    pct = t->speed_pct;
+    if (pct <= 0)
+        pct = 100;
+    if (pct < 8)
+        pct = 8;
+    if (pct > 200)
+        pct = 200;
+    return (float)pct / 100.0f;
 }
 
 void dungeon_fill(Dungeon *d, unsigned char t)
@@ -201,14 +266,15 @@ int dungeon_line_clear(const Dungeon *d, float x0, float y0, float x1, float y1)
 {
     float dx = x1 - x0, dy = y1 - y0;
     float dist = sqrtf(dx * dx + dy * dy);
-    int steps, i;
+    int steps, i, tx, ty;
 
     if (dist < 1.0f)
         return 1;
     steps = (int)(dist / 8.0f) + 1;
     for (i = 1; i <= steps; i++) {
         float t = (float)i / (float)steps;
-        if (dungeon_blocked(d, x0 + dx * t, y0 + dy * t, 4.0f))
+        dungeon_pos_tile(x0 + dx * t, y0 + dy * t, &tx, &ty);
+        if (dungeon_opaque(d, tx, ty))
             return 0;
     }
     return 1;

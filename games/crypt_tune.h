@@ -2,7 +2,7 @@
 #define CRYPT_TUNE_H
 
 /* Crypt balance. Numbers live in games/crypt_tune.c — edit there, F5.
- * Formulas (HP/VIT, hit chance, walk speed, monster speed, sight) apply on the next
+ * Formulas (HP/VIT, combat attrs, walk, monster speed, sight) apply on the next
  * swing / AI step. Starting kit, gold, bag size, and which monsters spawn need F6. */
 
 typedef struct {
@@ -26,14 +26,17 @@ typedef struct CryptTune {
         int mp_base, mp_per_mag, mp_per_level;
         int punch_min, punch_max;
         int dmg_str_div_min, dmg_str_div_max, ac_dex_div;
+        int hit_dex_div, dodge_div, parry_div, aspd_div;
     } derive;
 
     struct { int str, dex, vit, mag_even; } on_level;
     struct { int base, per_sq; } xp;
 
     struct {
-        int hit_base, hit_dex_div, hit_min, hit_max;
-        int armor_div, crit_base, crit_dex_div, crit_bonus_pct;
+        int hit_base, hit_min, hit_max;
+        int avoid_max, resist_cap;
+        int armor_div, crit_base, crit_dex_div, crit_bonus_pct, crit_max;
+        int block_min;
     } melee;
 
     struct { int hp_base, hp_per_level, mp_base, mp_per_mag; } potion;
@@ -51,13 +54,15 @@ typedef struct CryptTune {
     struct {
         int weapon_pct, armor_pct, helm_pct, shield_pct;
         int magic_over, rare_over, per_depth;
-        int wpn_min, wpn_max, arm, helm, shld;
+        int wpn_min, wpn_max, arm, helm, shld, shld_block, shld_blkamt, wpn_parry;
     } gear;
 
     struct {
         int str_lo, str_hi, dex_lo, dex_hi, vit_lo, vit_hi;
         int ac_lo, ac_hi, dmin_lo, dmin_hi, dmax_lo, dmax_hi;
         int life_lo, life_hi, mana_lo, mana_hi, mag_lo, mag_hi;
+        int hit_lo, hit_hi, dodge_lo, dodge_hi, crit_lo, crit_hi;
+        int resist_lo, resist_hi;
     } affix;
 
     struct {
@@ -82,6 +87,16 @@ typedef struct CryptTune {
         float swing, swing_dex, swing_min, swing_max, mob_swing;
         int death_gold_div;
     } feel;
+
+    struct {
+        int lava_spots, mud_spots, ice_spots;
+        int wilds_mud, wilds_ice, town_mud;
+        int blob;
+        int lava_cost, lava_speed, lava_power;
+        int mud_cost, mud_speed;
+        int ice_cost, ice_speed;
+        float tick;
+    } terrain;
 } CryptTune;
 
 extern const CryptTune Crypt;

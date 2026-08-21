@@ -27,6 +27,33 @@ static void reset_derived(RpgStats *live)
     live->v[ST_DMAX] = Crypt.derive.punch_max;
     live->v[ST_LIFE] = 0;
     live->v[ST_MANA] = 0;
+    live->v[ST_HIT] = 0;
+    live->v[ST_DODGE] = 0;
+    live->v[ST_PARRY] = 0;
+    live->v[ST_BLOCK] = 0;
+    live->v[ST_BLKAMT] = 0;
+    live->v[ST_CRIT] = 0;
+    live->v[ST_CRITDMG] = 0;
+    live->v[ST_ASPD] = 0;
+    live->v[ST_PEN] = 0;
+    live->v[ST_RPHYS] = 0;
+    live->v[ST_RFIRE] = 0;
+    live->v[ST_RCOLD] = 0;
+    live->v[ST_RLIT] = 0;
+    live->v[ST_RPOIS] = 0;
+}
+
+static void fill_combat_attrs(RpgStats *s)
+{
+    const CryptTune *T = &Crypt;
+    int dex = s->v[ST_DEX];
+
+    s->v[ST_HIT] += T->melee.hit_base + (T->derive.hit_dex_div > 0 ? dex / T->derive.hit_dex_div : 0);
+    s->v[ST_DODGE] += T->derive.dodge_div > 0 ? dex / T->derive.dodge_div : 0;
+    s->v[ST_PARRY] += T->derive.parry_div > 0 ? dex / T->derive.parry_div : 0;
+    s->v[ST_CRIT] += T->melee.crit_base + (T->melee.crit_dex_div > 0 ? dex / T->melee.crit_dex_div : 0);
+    s->v[ST_CRITDMG] += T->melee.crit_bonus_pct;
+    s->v[ST_ASPD] += T->derive.aspd_div > 0 ? dex / T->derive.aspd_div : 0;
 }
 
 static void derive(RpgStats *live)
@@ -45,6 +72,7 @@ static void derive(RpgStats *live)
     if (live->v[ST_DMAX] < live->v[ST_DMIN])
         live->v[ST_DMAX] = live->v[ST_DMIN];
     live->v[ST_ARMOR] += live->v[ST_DEX] / T->derive.ac_dex_div;
+    fill_combat_attrs(live);
 }
 
 static void level_up(RpgStats *base)
@@ -61,31 +89,139 @@ static int xp_to_next(int level)
     return Crypt.xp.base + level * level * Crypt.xp.per_sq;
 }
 
-static int melee(const RpgStats *atk, const RpgStats *def, int *crit)
+static int clampi(int v, int lo, int hi)
 {
-    int chance, dmg, span;
-    const CryptTune *T = &Crypt;
+    if (v < lo)
+        return lo;
+    if (v > hi)
+        return hi;
+    return v;
+}
 
-    if (crit)
-        *crit = 0;
-    chance = T->melee.hit_base + (atk->v[ST_DEX] - def->v[ST_DEX]) / T->melee.hit_dex_div;
-    if (chance < T->melee.hit_min)
-        chance = T->melee.hit_min;
-    if (chance > T->melee.hit_max)
-        chance = T->melee.hit_max;
-    if (rpg_rng(1, 100) > chance)
+static int cb_chance(int v, int hi)
+{
+    return clampi(v, 0, hi);
+}
+
+static int cb_dodge(const RpgAttack *a)
+{
+    return cb_chance(a->def->v[ST_DODGE], Crypt.melee.avoid_max);
+}
+
+static int cb_parry(const RpgAttack *a)
+{
+    if (a->style != RPG_STYLE_MELEE)
         return 0;
-    span = atk->v[ST_DMAX] - atk->v[ST_DMIN];
-    dmg = atk->v[ST_DMIN] + (span > 0 ? rpg_rng(0, span) : 0);
-    dmg -= def->v[ST_ARMOR] / T->melee.armor_div;
-    if (rpg_rng(1, 100) <= T->melee.crit_base + atk->v[ST_DEX] / T->melee.crit_dex_div) {
-        dmg += dmg * T->melee.crit_bonus_pct / 100;
-        if (crit)
-            *crit = 1;
-    }
-    if (dmg < 1)
-        dmg = 1;
+    return cb_chance(a->def->v[ST_PARRY], Crypt.melee.avoid_max);
+}
+
+static int cb_to_hit(const RpgAttack *a)
+{
+    return clampi(a->atk->v[ST_HIT], Crypt.melee.hit_min, Crypt.melee.hit_max);
+}
+
+static int cb_block(const RpgAttack *a)
+{
+    if (a->style != RPG_STYLE_MELEE)
+        return 0;
+    return cb_chance(a->def->v[ST_BLOCK], Crypt.melee.avoid_max);
+}
+
+static int cb_roll_damage(const RpgAttack *a)
+{
+    int lo, hi, span, dmg;
+
+    lo = a->atk->v[ST_DMIN];
+    hi = a->atk->v[ST_DMAX];
+    if (hi < lo)
+        hi = lo;
+    span = hi - lo;
+    dmg = lo + (span > 0 ? rpg_rng(0, span) : 0);
+    if (a->power > 0)
+        dmg += a->power;
     return dmg;
+}
+
+static int cb_crit_chance(const RpgAttack *a)
+{
+    return cb_chance(a->atk->v[ST_CRIT], Crypt.melee.crit_max);
+}
+
+static int cb_crit_apply(const RpgAttack *a, int dmg)
+{
+    int pct = a->atk->v[ST_CRITDMG];
+
+    if (pct < 0)
+        pct = 0;
+    return dmg + dmg * pct / 100;
+}
+
+static int cb_block_apply(const RpgAttack *a, int dmg)
+{
+    dmg -= a->def->v[ST_BLKAMT];
+    if (dmg < Crypt.melee.block_min)
+        dmg = Crypt.melee.block_min;
+    return dmg;
+}
+
+static int cb_armor(const RpgAttack *a, int dmg)
+{
+    int ac;
+
+    if (a->dtype != 0 && a->dtype != DT_PHYS)
+        return dmg;
+    ac = a->def->v[ST_ARMOR] - a->atk->v[ST_PEN];
+    if (ac < 0)
+        ac = 0;
+    if (Crypt.melee.armor_div > 0)
+        dmg -= ac / Crypt.melee.armor_div;
+    return dmg;
+}
+
+static int resist_stat(int dtype)
+{
+    switch (dtype) {
+    case DT_FIRE:
+        return ST_RFIRE;
+    case DT_COLD:
+        return ST_RCOLD;
+    case DT_LIT:
+        return ST_RLIT;
+    case DT_POIS:
+        return ST_RPOIS;
+    default:
+        return ST_RPHYS;
+    }
+}
+
+static int cb_resist(const RpgAttack *a, int dmg)
+{
+    int r = a->def->v[resist_stat(a->dtype ? a->dtype : DT_PHYS)];
+
+    r = clampi(r, 0, Crypt.melee.resist_cap);
+    return dmg * (100 - r) / 100;
+}
+
+static int cb_floor_dmg(const RpgAttack *a, int dmg)
+{
+    (void)a;
+    return dmg < 1 ? 1 : dmg;
+}
+
+float crypt_swing_period(const RpgStats *s)
+{
+    int haste;
+    float p;
+
+    haste = s ? s->v[ST_ASPD] : 0;
+    if (haste < 0)
+        haste = 0;
+    p = Crypt.feel.swing * 100.0f / (100.0f + (float)haste);
+    if (p < Crypt.feel.swing_min)
+        p = Crypt.feel.swing_min;
+    if (p > Crypt.feel.swing_max)
+        p = Crypt.feel.swing_max;
+    return p;
 }
 
 static int item_value(const RpgItem *it)
@@ -104,6 +240,10 @@ static int item_value(const RpgItem *it)
     for (i = ST_STR; i <= ST_VIT; i++)
         v += it->mods[i] * T->price.affix;
     v += it->mods[ST_LIFE] + it->mods[ST_MANA];
+    v += (it->mods[ST_HIT] + it->mods[ST_DODGE] + it->mods[ST_PARRY] + it->mods[ST_BLOCK] + it->mods[ST_CRIT] +
+          it->mods[ST_PEN] + it->mods[ST_RPHYS] + it->mods[ST_RFIRE] + it->mods[ST_RCOLD] + it->mods[ST_RLIT] +
+          it->mods[ST_RPOIS]) *
+         T->price.affix / 2;
     if (it->rarity == RPG_MAGIC)
         v *= T->price.magic_mul;
     if (it->rarity == RPG_RARE)
@@ -140,8 +280,10 @@ static int use_item(RpgStats *live, RpgItem *it)
 
 static void describe(const RpgItem *it, char *buf, size_t n)
 {
-    snprintf(buf, n, "%s   %+d-%d dmg  %+d ac  %+d str %+d dex %+d vit  %+d life", it->name, it->mods[ST_DMIN],
-             it->mods[ST_DMAX], it->mods[ST_ARMOR], it->mods[ST_STR], it->mods[ST_DEX], it->mods[ST_VIT],
+    snprintf(buf, n,
+             "%s   %+d-%d dmg  %+d ac  %+d hit %+d dodge %+d parry %+d blk  %+d str %+d dex %+d vit  %+d life",
+             it->name, it->mods[ST_DMIN], it->mods[ST_DMAX], it->mods[ST_ARMOR], it->mods[ST_HIT], it->mods[ST_DODGE],
+             it->mods[ST_PARRY], it->mods[ST_BLOCK], it->mods[ST_STR], it->mods[ST_DEX], it->mods[ST_VIT],
              it->mods[ST_LIFE]);
 }
 
@@ -208,15 +350,19 @@ static int roll_kind(int depth, RpgItem *it)
         it->kind = IT_WEP;
         it->mods[ST_DMIN] = T->gear.wpn_min + bump;
         it->mods[ST_DMAX] = T->gear.wpn_max + bump * 2 + rpg_rng(0, 2);
+        it->mods[ST_PARRY] = T->gear.wpn_parry;
     } else if (roll < T->gear.armor_pct) {
         it->kind = IT_ARM;
         it->mods[ST_ARMOR] = T->gear.arm + bump * 2 + rpg_rng(0, 3);
+        it->mods[ST_RPHYS] = bump;
     } else if (roll < T->gear.helm_pct) {
         it->kind = IT_HELM;
         it->mods[ST_ARMOR] = T->gear.helm + bump + rpg_rng(0, 2);
     } else if (roll < T->gear.shield_pct) {
         it->kind = IT_OFF;
         it->mods[ST_ARMOR] = T->gear.shld + bump + rpg_rng(0, 2);
+        it->mods[ST_BLOCK] = T->gear.shld_block + bump;
+        it->mods[ST_BLKAMT] = T->gear.shld_blkamt + bump / 2;
     } else {
         it->kind = IT_RING;
         it->mods[ST_STR] = rpg_rng(0, 1 + bump / 2);
@@ -249,7 +395,7 @@ static void affix(RpgItem *it)
 {
     const CryptTune *A = &Crypt;
 
-    switch (rpg_rng(0, 6)) {
+    switch (rpg_rng(0, 9)) {
     case 0:
         it->mods[ST_STR] += rpg_rng(A->affix.str_lo, A->affix.str_hi);
         break;
@@ -269,9 +415,19 @@ static void affix(RpgItem *it)
     case 5:
         it->mods[ST_LIFE] += rpg_rng(A->affix.life_lo, A->affix.life_hi);
         break;
+    case 6:
+        it->mods[ST_HIT] += rpg_rng(A->affix.hit_lo, A->affix.hit_hi);
+        break;
+    case 7:
+        it->mods[ST_DODGE] += rpg_rng(A->affix.dodge_lo, A->affix.dodge_hi);
+        break;
+    case 8:
+        it->mods[ST_CRIT] += rpg_rng(A->affix.crit_lo, A->affix.crit_hi);
+        break;
     default:
         it->mods[ST_MANA] += rpg_rng(A->affix.mana_lo, A->affix.mana_hi);
         it->mods[ST_MAG] += rpg_rng(A->affix.mag_lo, A->affix.mag_hi);
+        it->mods[ST_RFIRE + rpg_rng(0, 3)] += rpg_rng(A->affix.resist_lo, A->affix.resist_hi);
         break;
     }
 }
@@ -348,6 +504,7 @@ void crypt_mob_stats(RpgStats *out, const CryptSpecies *sp, int depth, int champ
     out->v[ST_GOLD] = rpg_rng(sp->gold_min, sp->gold_max) * scale;
     if (champion)
         out->v[ST_GOLD] *= T->scale.champ_gold_mul;
+    fill_combat_attrs(out);
 }
 
 static float crypt_move_speed(const CryptSpecies *sp, int role)
@@ -406,7 +563,7 @@ void crypt_actor_setup(RpgActor *a, int species, int depth, int champion)
     f.range = sp->range;
     f.radius = sp->radius;
     f.see_walls = sp->see_walls;
-    f.attack_reload = Crypt.feel.mob_swing;
+    f.attack_reload = Crypt.feel.mob_swing * 100.0f / (100.0f + (float)a->st.v[ST_ASPD]);
     f.ability_reload = sp->ability_cd;
     f.ability = sp->ability;
     rpg_actor_feel(a, &f);
@@ -428,7 +585,7 @@ void crypt_actor_refresh(RpgActor *a)
     f.range = sp->range;
     f.radius = sp->radius;
     f.see_walls = sp->see_walls;
-    f.attack_reload = Crypt.feel.mob_swing;
+    f.attack_reload = Crypt.feel.mob_swing * 100.0f / (100.0f + (float)a->st.v[ST_ASPD]);
     f.ability_reload = sp->ability_cd;
     f.ability = sp->ability;
     rpg_actor_feel(a, &f);
@@ -483,7 +640,19 @@ const RpgRules crypt_rules = {
     .derive = derive,
     .level_up = level_up,
     .xp_to_next = xp_to_next,
-    .melee = melee,
+    .combat = {
+        .dodge = cb_dodge,
+        .parry = cb_parry,
+        .to_hit = cb_to_hit,
+        .block = cb_block,
+        .roll_damage = cb_roll_damage,
+        .crit_chance = cb_crit_chance,
+        .crit_apply = cb_crit_apply,
+        .block_apply = cb_block_apply,
+        .armor = cb_armor,
+        .resist = cb_resist,
+        .floor_dmg = cb_floor_dmg,
+    },
     .item_value = item_value,
     .item_price = item_price,
     .use_item = use_item,
@@ -493,11 +662,22 @@ const RpgRules crypt_rules = {
 void crypt_bind(void)
 {
     static RpgRules live;
+    static RpgTerrain terr[5];
+
+    memset(terr, 0, sizeof(terr));
+    terr[DUN_WALL] = (RpgTerrain){ RPG_TF_BLOCK_LOS, 0, 100, 0, 0 };
+    terr[DUN_FLOOR] = (RpgTerrain){ RPG_TF_WALK, 1, 100, 0, 0 };
+    terr[CRYPT_LAVA] = (RpgTerrain){ RPG_TF_WALK | RPG_TF_HAZARD, Crypt.terrain.lava_cost, Crypt.terrain.lava_speed,
+                                    DT_FIRE, Crypt.terrain.lava_power };
+    terr[CRYPT_MUD] = (RpgTerrain){ RPG_TF_WALK, Crypt.terrain.mud_cost, Crypt.terrain.mud_speed, 0, 0 };
+    terr[CRYPT_ICE] = (RpgTerrain){ RPG_TF_WALK, Crypt.terrain.ice_cost, Crypt.terrain.ice_speed, 0, 0 };
 
     live = crypt_rules;
     live.inv_w = Crypt.bag.w;
     live.inv_h = Crypt.bag.h;
     live.max_level = Crypt.bag.max_level;
+    live.terrain = terr;
+    live.terrain_n = 5;
     rpg_bind(&live);
 }
 
@@ -512,6 +692,7 @@ void crypt_kit(RpgHero *pc)
     club.stack = 1;
     club.mods[ST_DMIN] = Crypt.kit.club_min;
     club.mods[ST_DMAX] = Crypt.kit.club_max;
+    club.mods[ST_PARRY] = Crypt.gear.wpn_parry;
     snprintf(club.name, sizeof(club.name), "Club");
     rpg_inv_add(&pc->inv, club);
     rpg_equip(&pc->inv, 0);
@@ -598,6 +779,7 @@ static void build_town(RpgWorld *w)
     p = rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_GATE, 36, 58, "Town gate", "Space — leave town");
     if (p)
         p->dest_zone = RPG_ZONE_OVERWORLD;
+    crypt_paint_terrain(d, RPG_ZONE_TOWN, 0);
 }
 
 static void build_overworld(RpgWorld *w)
@@ -650,6 +832,93 @@ static void build_overworld(RpgWorld *w)
             p->dest_depth = sites[i].depth;
         }
     }
+    crypt_paint_terrain(d, RPG_ZONE_OVERWORLD, 0);
+}
+
+static int terrain_reserved(const Dungeon *d, int tx, int ty)
+{
+    int dx, dy;
+
+    dx = tx - d->start_tx;
+    dy = ty - d->start_ty;
+    if (dx * dx + dy * dy < 25)
+        return 1;
+    dx = tx - d->stair_tx;
+    dy = ty - d->stair_ty;
+    if (dx * dx + dy * dy < 16)
+        return 1;
+    return 0;
+}
+
+static void stamp_blob(Dungeon *d, int cx, int cy, int r, unsigned char t)
+{
+    int x, y;
+
+    for (y = cy - r; y <= cy + r; y++) {
+        for (x = cx - r; x <= cx + r; x++) {
+            int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy > r * r)
+                continue;
+            if (terrain_reserved(d, x, y))
+                continue;
+            if (dungeon_get(d, x, y) != DUN_FLOOR)
+                continue;
+            dungeon_set(d, x, y, t);
+        }
+    }
+}
+
+static int random_plain(const Dungeon *d, int *tx, int *ty)
+{
+    int i;
+
+    for (i = 0; i < 48; i++) {
+        *tx = rpg_rng(1, DUN_W - 2);
+        *ty = rpg_rng(1, DUN_H - 2);
+        if (dungeon_get(d, *tx, *ty) == DUN_FLOOR && !terrain_reserved(d, *tx, *ty))
+            return 1;
+    }
+    return 0;
+}
+
+static void stamp_spots(Dungeon *d, int n, unsigned char t)
+{
+    int i, tx, ty, r, cap;
+
+    cap = Crypt.terrain.blob;
+    if (cap < 1)
+        cap = 1;
+    if (cap > 4)
+        cap = 4;
+    for (i = 0; i < n; i++) {
+        if (!random_plain(d, &tx, &ty))
+            continue;
+        r = rpg_rng(1, cap);
+        stamp_blob(d, tx, ty, r, t);
+    }
+}
+
+void crypt_paint_terrain(Dungeon *d, int zone, int depth)
+{
+    int lava = 0, mud = 0, ice = 0;
+
+    if (!d)
+        return;
+    if (zone == RPG_ZONE_TOWN)
+        mud = Crypt.terrain.town_mud;
+    else if (zone == RPG_ZONE_OVERWORLD) {
+        mud = Crypt.terrain.wilds_mud;
+        ice = Crypt.terrain.wilds_ice;
+    } else {
+        if (depth < 1)
+            depth = 1;
+        lava = Crypt.terrain.lava_spots + depth / 2;
+        mud = Crypt.terrain.mud_spots;
+        ice = Crypt.terrain.ice_spots;
+    }
+    stamp_spots(d, lava, CRYPT_LAVA);
+    stamp_spots(d, mud, CRYPT_MUD);
+    stamp_spots(d, ice, CRYPT_ICE);
 }
 
 void crypt_world_init(RpgWorld *w, unsigned seed)

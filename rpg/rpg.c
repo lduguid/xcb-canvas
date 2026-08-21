@@ -37,6 +37,13 @@ const RpgRules *rpg_rules(void)
     return R;
 }
 
+const RpgTerrain *rpg_terrain(int kind)
+{
+    if (!R || !R->terrain || kind < 0 || kind >= R->terrain_n)
+        return NULL;
+    return &R->terrain[kind];
+}
+
 static int stat_ok(int id)
 {
     return id >= 0 && id < RPG_STAT_MAX && R && id < R->stat_n;
@@ -317,13 +324,118 @@ int rpg_mana(RpgStats *live, int n)
     return R ? bump_stat(live, R->mp, R->mp_max, n) : 0;
 }
 
+static int combat_ready(void)
+{
+    const RpgCombat *c;
+
+    if (!R)
+        return 0;
+    c = &R->combat;
+    return c->dodge || c->parry || c->to_hit || c->block || c->roll_damage || c->armor || c->resist;
+}
+
+static int roll_pct(int chance)
+{
+    if (chance <= 0)
+        return 0;
+    return rpg_rng(1, 100) <= chance;
+}
+
+int rpg_hit_connected(const RpgHit *h)
+{
+    return h && (h->outcome == RPG_HIT_HIT || h->outcome == RPG_HIT_BLOCK);
+}
+
+int rpg_resolve(const RpgAttack *a, RpgHit *out)
+{
+    const RpgCombat *c;
+    int chance, blocked = 0, dmg = 0, raw = 0;
+
+    if (out)
+        memset(out, 0, sizeof(*out));
+    if (!a || !a->atk || !a->def || !out)
+        return 0;
+    out->dtype = a->dtype;
+    if (!combat_ready()) {
+        if (R && R->melee) {
+            out->dmg = R->melee(a->atk, a->def, &out->crit);
+            out->raw = out->dmg;
+            out->outcome = out->dmg > 0 ? RPG_HIT_HIT : RPG_HIT_MISS;
+            return 1;
+        }
+        return 0;
+    }
+    c = &R->combat;
+    if (!(a->flags & RPG_AF_CANT_DODGE) && c->dodge) {
+        chance = c->dodge(a);
+        if (chance >= 0 && roll_pct(chance)) {
+            out->outcome = RPG_HIT_DODGE;
+            return 1;
+        }
+    }
+    if (!(a->flags & RPG_AF_CANT_PARRY) && c->parry) {
+        chance = c->parry(a);
+        if (chance >= 0 && roll_pct(chance)) {
+            out->outcome = RPG_HIT_PARRY;
+            return 1;
+        }
+    }
+    if (!(a->flags & RPG_AF_ALWAYS_HIT) && c->to_hit) {
+        chance = c->to_hit(a);
+        if (chance >= 0 && !roll_pct(chance)) {
+            out->outcome = RPG_HIT_MISS;
+            return 1;
+        }
+    }
+    if (!(a->flags & RPG_AF_CANT_BLOCK) && c->block) {
+        chance = c->block(a);
+        if (chance >= 0 && roll_pct(chance))
+            blocked = 1;
+    }
+    if (c->roll_damage)
+        dmg = c->roll_damage(a);
+    raw = dmg;
+    if (c->crit_chance && roll_pct(c->crit_chance(a))) {
+        out->crit = 1;
+        if (c->crit_apply)
+            dmg = c->crit_apply(a, dmg);
+    }
+    if (blocked && c->block_apply)
+        dmg = c->block_apply(a, dmg);
+    if (c->armor)
+        dmg = c->armor(a, dmg);
+    if (c->resist)
+        dmg = c->resist(a, dmg);
+    if (c->floor_dmg)
+        dmg = c->floor_dmg(a, dmg);
+    else if (dmg < 0)
+        dmg = 0;
+    out->raw = raw;
+    out->dmg = dmg;
+    out->mitigated = raw - dmg;
+    if (out->mitigated < 0)
+        out->mitigated = 0;
+    out->outcome = blocked ? RPG_HIT_BLOCK : RPG_HIT_HIT;
+    return 1;
+}
+
 int rpg_melee(const RpgStats *atk, const RpgStats *def, int *crit)
 {
-    if (crit)
-        *crit = 0;
-    if (!R || !R->melee)
+    RpgAttack a;
+    RpgHit h;
+
+    memset(&a, 0, sizeof(a));
+    a.atk = atk;
+    a.def = def;
+    a.style = RPG_STYLE_MELEE;
+    if (!rpg_resolve(&a, &h)) {
+        if (crit)
+            *crit = 0;
         return 0;
-    return R->melee(atk, def, crit);
+    }
+    if (crit)
+        *crit = h.crit;
+    return rpg_hit_connected(&h) ? h.dmg : 0;
 }
 
 void rpg_item_desc(const RpgItem *it, char *buf, size_t n)

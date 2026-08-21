@@ -24,9 +24,13 @@
 #define BAR_GAP 5.0f
 #define BOOK_W 8
 #define BOOK_H 3
+#define LOG_MAX 80
+#define LOG_LEN 72
+#define PANE_TITLE 18.0f
 
 enum { UI_NONE = 0, UI_INV, UI_VENDOR, UI_BANK, UI_QUEST };
 enum { DRAG_NONE = 0, DRAG_BAG, DRAG_BAR, DRAG_BOOK };
+enum { PANE_LOG = 0, PANE_MAP, PANE_N };
 
 typedef struct {
     int on, dmg, crit;
@@ -37,6 +41,16 @@ typedef struct {
     int on;
     float x, y, a;
 } Blood;
+
+typedef struct {
+    float r, g, b;
+    char t[LOG_LEN];
+} LogLine;
+
+typedef struct {
+    int open;
+    float x, y, w, h;
+} Pane;
 
 typedef struct {
     RpgWorld world;
@@ -53,10 +67,13 @@ typedef struct {
     int ui, dead, quit_ask, hover_loot, hover_mob, hover_place;
     int target, loot_want, has_dest, mob_n;
     int ow_ready, ow_mob_n, drag_src, drag_i, drag_live;
-    float dest_x, dest_y, attack_cd, bob, step_t, dead_t, note_t, walk_gait;
+    float dest_x, dest_y, attack_cd, bob, step_t, dead_t, note_t, walk_gait, haz_t, haz_say;
     float drag_px, drag_py;
-    int walk_beat;
+    int walk_beat, log_n, log_head, log_scroll, pane_drag, pane_eat;
     char note[72];
+    LogLine log[LOG_MAX];
+    Pane pane[PANE_N];
+    float pane_gx, pane_gy;
     unsigned snd_hit, snd_miss, snd_die, snd_loot, snd_step, snd_drink, snd_level;
 } Arpg;
 
@@ -134,6 +151,100 @@ static int hit_rect(float mx, float my, float x, float y, float w, float h)
     return mx >= x && mx < x + w && my >= y && my < y + h;
 }
 
+static void log_push(Arpg *g, const char *s, float r, float gg, float b)
+{
+    LogLine *L;
+
+    if (!g || !s || !s[0])
+        return;
+    L = &g->log[g->log_head];
+    snprintf(L->t, sizeof(L->t), "%s", s);
+    L->r = r;
+    L->g = gg;
+    L->b = b;
+    g->log_head = (g->log_head + 1) % LOG_MAX;
+    if (g->log_n < LOG_MAX)
+        g->log_n++;
+    g->log_scroll = 0;
+}
+
+static const LogLine *log_at(const Arpg *g, int i)
+{
+    int idx;
+
+    if (!g || i < 0 || i >= g->log_n)
+        return NULL;
+    idx = (g->log_head - g->log_n + i + LOG_MAX * 2) % LOG_MAX;
+    return &g->log[idx];
+}
+
+static void pane_defaults(Arpg *g, int W, int H)
+{
+    if (g->pane[PANE_LOG].w >= 8.0f)
+        return;
+    g->pane[PANE_LOG].open = 1;
+    g->pane[PANE_LOG].x = 10.0f;
+    g->pane[PANE_LOG].y = 36.0f;
+    g->pane[PANE_LOG].w = 268.0f;
+    g->pane[PANE_LOG].h = 168.0f;
+    g->pane[PANE_MAP].open = 0;
+    g->pane[PANE_MAP].x = (float)W - 216.0f;
+    g->pane[PANE_MAP].y = 36.0f;
+    g->pane[PANE_MAP].w = 200.0f;
+    g->pane[PANE_MAP].h = 200.0f;
+    (void)H;
+}
+
+static void pane_clamp(Pane *p, int W, int H)
+{
+    float maxy = (float)H - 70.0f;
+
+    if (p->w < 80.0f)
+        p->w = 80.0f;
+    if (p->h < 64.0f)
+        p->h = 64.0f;
+    if (p->x < 0.0f)
+        p->x = 0.0f;
+    if (p->y < 26.0f)
+        p->y = 26.0f;
+    if (p->x + p->w > (float)W)
+        p->x = (float)W - p->w;
+    if (p->y + p->h > maxy)
+        p->y = maxy - p->h;
+    if (p->x < 0.0f)
+        p->x = 0.0f;
+    if (p->y < 26.0f)
+        p->y = 26.0f;
+}
+
+static int pane_over(const Pane *p, float mx, float my)
+{
+    return p->open && hit_rect(mx, my, p->x, p->y, p->w, p->h);
+}
+
+static int pane_title(const Pane *p, float mx, float my)
+{
+    return p->open && hit_rect(mx, my, p->x, p->y, p->w, PANE_TITLE);
+}
+
+static int pane_close_at(const Pane *p, float mx, float my)
+{
+    return p->open && hit_rect(mx, my, p->x + p->w - 16.0f, p->y + 2.0f, 14.0f, 14.0f);
+}
+
+static int pane_blocks(const Arpg *g, float mx, float my)
+{
+    int i;
+
+    if (g->pane_drag >= 0)
+        return 1;
+    for (i = 0; i < PANE_N; i++) {
+        if (pane_over(&g->pane[i], mx, my))
+            return 1;
+    }
+    return 0;
+}
+
 static const Sheet *zone_tiles(const Arpg *g)
 {
     if (g->world.zone == RPG_ZONE_TOWN && g->ts_haven.texture)
@@ -184,6 +295,7 @@ static void say(Arpg *g, Canvas *c, const char *s)
 {
     snprintf(g->note, sizeof(g->note), "%s", s);
     g->note_t = 2.2f;
+    log_push(g, s, 0.95f, 0.9f, 0.55f);
     canvas_trace(c, "note", "%s", s);
 }
 
@@ -384,6 +496,7 @@ static void enter_dungeon(Arpg *g, Canvas *c, int id, int depth)
 {
     snapshot_overworld(g);
     dungeon_gen(&g->world.maps[RPG_ZONE_DUNGEON], rpg_randu() ? rpg_randu() : 1u);
+    crypt_paint_terrain(&g->world.maps[RPG_ZONE_DUNGEON], RPG_ZONE_DUNGEON, depth);
     memset(g->world.seen[RPG_ZONE_DUNGEON], 0, sizeof(g->world.seen[RPG_ZONE_DUNGEON]));
     rpg_world_bind_dungeon(&g->world, id, depth);
     g->world.zone = RPG_ZONE_DUNGEON;
@@ -657,7 +770,15 @@ static void kill_mob(Arpg *g, Canvas *c, int i)
     }
     lv = rpg_hero_gain_xp(&g->pc, MS(m, ST_XP));
     refresh(g);
+    {
+        char buf[72];
+        snprintf(buf, sizeof(buf), "Slew %s", crypt_species[m->kind].name);
+        log_push(g, buf, 0.85f, 0.55f, 0.4f);
+    }
     if (lv) {
+        char buf[40];
+        snprintf(buf, sizeof(buf), "Level %d", LS(g, ST_LV));
+        log_push(g, buf, 0.95f, 0.85f, 0.35f);
         canvas_sound_play(c, g->snd_level, 0.8f);
         canvas_trace(c, "level", "%d", LS(g, ST_LV));
     }
@@ -666,10 +787,67 @@ static void kill_mob(Arpg *g, Canvas *c, int i)
         g->target = -1;
 }
 
+static void hurt_hero(Arpg *g, Canvas *c, int dmg, int crit);
+
+static const char *hit_word(int outcome)
+{
+    switch (outcome) {
+    case RPG_HIT_DODGE:
+        return "Dodge";
+    case RPG_HIT_PARRY:
+        return "Parry";
+    case RPG_HIT_BLOCK:
+        return "Block";
+    case RPG_HIT_MISS:
+        return "Miss";
+    default:
+        return "Miss";
+    }
+}
+
+static void strike(Arpg *g, Canvas *c, const RpgStats *atk, RpgStats *def, float fx, float fy, int from_hero,
+                   const char *who)
+{
+    RpgAttack a;
+    RpgHit h;
+
+    memset(&a, 0, sizeof(a));
+    a.atk = atk;
+    a.def = def;
+    a.style = RPG_STYLE_MELEE;
+    a.dtype = DT_PHYS;
+    rpg_resolve(&a, &h);
+    {
+        char buf[72];
+
+        if (!rpg_hit_connected(&h))
+            snprintf(buf, sizeof(buf), "%s — %s", who ? who : "?", hit_word(h.outcome));
+        else if (from_hero)
+            snprintf(buf, sizeof(buf), "Hit %s  %d%s%s", who ? who : "?", h.dmg, h.crit ? "*" : "",
+                     h.outcome == RPG_HIT_BLOCK ? " block" : "");
+        else
+            snprintf(buf, sizeof(buf), "%s hits you  %d%s%s", who ? who : "?", h.dmg, h.crit ? "*" : "",
+                     h.outcome == RPG_HIT_BLOCK ? " block" : "");
+        log_push(g, buf, from_hero ? 0.92f : 0.95f, from_hero ? 0.78f : 0.45f, from_hero ? 0.45f : 0.4f);
+    }
+    if (!rpg_hit_connected(&h)) {
+        canvas_sound_play(c, g->snd_miss, 0.4f);
+        add_fx(g, fx, fy, 0, 0, 0.7f, 0.7f, 0.7f);
+        canvas_trace(c, "avoid", "%s %s", who ? who : "", hit_word(h.outcome));
+        return;
+    }
+    if (from_hero) {
+        rpg_add(def, ST_HP, -h.dmg);
+        add_fx(g, fx, fy, h.dmg, h.crit, 1.0f, h.crit ? 0.9f : (h.outcome == RPG_HIT_BLOCK ? 0.7f : 0.35f), 0.2f);
+        canvas_sound_play(c, g->snd_hit, h.crit ? 0.9f : 0.65f);
+        canvas_trace(c, "hit", "%s %d%s hp %d", who, h.dmg, h.crit ? " crit" : "", rpg_get(def, ST_HP));
+    } else
+        hurt_hero(g, c, h.dmg, h.crit);
+}
+
 static void hero_swing(Arpg *g, Canvas *c)
 {
     RpgActor *m;
-    int dmg, crit;
     const CryptSpecies *sp;
 
     if (g->target < 0 || g->attack_cd > 0.0f || g->dead)
@@ -682,21 +860,9 @@ static void hero_swing(Arpg *g, Canvas *c)
     sp = &crypt_species[m->kind];
     if (dist2(g->spr.x, g->spr.y, m->x, m->y) > (MELEE + sp->radius) * (MELEE + sp->radius))
         return;
-    dmg = rpg_melee(&g->pc.live, &m->st, &crit);
-    g->attack_cd = clampf(Crypt.feel.swing - LS(g, ST_DEX) * Crypt.feel.swing_dex, Crypt.feel.swing_min,
-                          Crypt.feel.swing_max);
-    if (dmg <= 0) {
-        canvas_sound_play(c, g->snd_miss, 0.4f);
-        add_fx(g, m->x, m->y - 18.0f, 0, 0, 0.7f, 0.7f, 0.7f);
-        canvas_trace(c, "miss", "%s", crypt_species[m->kind].name);
-        return;
-    }
-    rpg_add(&m->st, ST_HP, -dmg);
+    g->attack_cd = crypt_swing_period(&g->pc.live);
+    strike(g, c, &g->pc.live, &m->st, m->x, m->y - 20.0f, 1, sp->name);
     m->hurt = 0.12f;
-    add_fx(g, m->x, m->y - 20.0f, dmg, crit, 1.0f, crit ? 0.9f : 0.35f, 0.2f);
-    canvas_sound_play(c, g->snd_hit, crit ? 0.9f : 0.65f);
-    canvas_trace(c, "hit", "%s %d%s hp %d", crypt_species[m->kind].name, dmg, crit ? " crit" : "",
-                 rpg_get(&m->st, ST_HP));
     if (rpg_get(&m->st, ST_HP) <= 0)
         kill_mob(g, c, g->target);
 }
@@ -717,6 +883,7 @@ static void hurt_hero(Arpg *g, Canvas *c, int dmg, int crit)
         g->dead_t = 0.0f;
         g->has_dest = 0;
         g->target = -1;
+        log_push(g, "You die", 0.95f, 0.25f, 0.2f);
         canvas_sound_play(c, g->snd_die, 0.9f);
         canvas_trace(c, "death", "hp 0 gold %d zone %s", LS(g, ST_GOLD), crypt_zone_title(&g->world));
     }
@@ -724,19 +891,34 @@ static void hurt_hero(Arpg *g, Canvas *c, int dmg, int crit)
 
 static void mob_ability(Arpg *g, Canvas *c, RpgActor *m, int ab)
 {
-    int dmg, crit;
     float reach, d;
 
     if (ab == CRYPT_AB_SLAM) {
         reach = m->range * 1.85f;
         d = dist2(g->spr.x, g->spr.y, m->x, m->y);
         add_fx(g, m->x, m->y - 10.0f, 0, 1, 0.95f, 0.45f, 0.15f);
+        {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%s slams", crypt_species[m->kind].name);
+            log_push(g, buf, 0.95f, 0.55f, 0.25f);
+        }
         canvas_trace(c, "ability", "%s slam", crypt_species[m->kind].name);
         if (d <= reach * reach) {
-            dmg = rpg_melee(&m->st, &g->pc.live, &crit);
-            if (dmg > 0)
-                dmg = dmg + dmg / 2;
-            hurt_hero(g, c, dmg, 1);
+            RpgAttack a;
+            RpgHit h;
+
+            memset(&a, 0, sizeof(a));
+            a.atk = &m->st;
+            a.def = &g->pc.live;
+            a.style = RPG_STYLE_MELEE;
+            a.dtype = DT_PHYS;
+            a.power = m->st.v[ST_DMAX] / 2;
+            a.flags = RPG_AF_CANT_PARRY;
+            rpg_resolve(&a, &h);
+            if (rpg_hit_connected(&h))
+                hurt_hero(g, c, h.dmg + h.dmg / 2, 1);
+            else
+                say(g, c, hit_word(h.outcome));
         }
         return;
     }
@@ -744,7 +926,7 @@ static void mob_ability(Arpg *g, Canvas *c, RpgActor *m, int ab)
 
 static void mob_ai(Arpg *g, Canvas *c, float dt)
 {
-    int i, dmg, crit;
+    int i;
     RpgActor *m;
     RpgAiResult act;
 
@@ -760,8 +942,7 @@ static void mob_ai(Arpg *g, Canvas *c, float dt)
             mob_ability(g, c, m, act.ability);
             continue;
         }
-        dmg = rpg_melee(&m->st, &g->pc.live, &crit);
-        hurt_hero(g, c, dmg, crit);
+        strike(g, c, &m->st, &g->pc.live, g->spr.x, g->spr.y - 28.0f, 0, "you");
     }
 }
 
@@ -806,7 +987,7 @@ static void move_hero(Arpg *g, float dt)
         return;
     }
     sp = Crypt.feel.walk + LS(g, ST_DEX) * Crypt.feel.walk_dex;
-    step = sp * dt;
+    step = sp * dt * dungeon_speed_at(cmap(g), g->spr.x, g->spr.y);
     if (step > len)
         step = len;
     dx = dx / len * step;
@@ -834,6 +1015,68 @@ static void move_hero(Arpg *g, float dt)
         g->spr.flip_x = 1;
     if (dx > 0.4f)
         g->spr.flip_x = 0;
+}
+
+static int terrain_pulse(RpgStats *def, const RpgTerrain *t, RpgHit *h)
+{
+    RpgStats env;
+    RpgAttack a;
+
+    if (!def || !t || !h || !(t->flags & RPG_TF_HAZARD) || t->power <= 0)
+        return 0;
+    memset(&env, 0, sizeof(env));
+    rpg_set(&env, ST_DMIN, t->power);
+    rpg_set(&env, ST_DMAX, t->power);
+    memset(&a, 0, sizeof(a));
+    a.atk = &env;
+    a.def = def;
+    a.style = RPG_STYLE_SPELL;
+    a.dtype = t->dtype;
+    a.power = t->power;
+    a.flags = RPG_AF_ALWAYS_HIT | RPG_AF_CANT_DODGE | RPG_AF_CANT_PARRY | RPG_AF_CANT_BLOCK;
+    rpg_resolve(&a, h);
+    return rpg_hit_connected(h) && h->dmg > 0;
+}
+
+static void tick_terrain(Arpg *g, Canvas *c, float dt)
+{
+    const RpgTerrain *t;
+    RpgHit h;
+    float period;
+    int i, tx, ty;
+
+    if (g->haz_say > 0.0f)
+        g->haz_say -= dt;
+    period = Crypt.terrain.tick;
+    if (period < 0.2f)
+        period = 0.2f;
+    g->haz_t += dt;
+    if (g->haz_t < period)
+        return;
+    g->haz_t = 0.0f;
+
+    dungeon_pos_tile(g->spr.x, g->spr.y, &tx, &ty);
+    t = rpg_terrain(dungeon_get(cmap(g), tx, ty));
+    if (!g->dead && terrain_pulse(&g->pc.live, t, &h)) {
+        hurt_hero(g, c, h.dmg, 0);
+        if (g->haz_say <= 0.0f) {
+            log_push(g, t->dtype == DT_FIRE ? "Embers sear you" : "The ground hurts", 0.95f, 0.42f, 0.18f);
+            g->haz_say = 1.6f;
+        }
+    }
+    for (i = 0; i < g->mob_n; i++) {
+        RpgActor *m = &g->mobs[i];
+        if (!m->alive)
+            continue;
+        dungeon_pos_tile(m->x, m->y, &tx, &ty);
+        t = rpg_terrain(dungeon_get(cmap(g), tx, ty));
+        if (!terrain_pulse(&m->st, t, &h))
+            continue;
+        rpg_add(&m->st, ST_HP, -h.dmg);
+        add_fx(g, m->x, m->y - 16.0f, h.dmg, 0, 0.95f, 0.4f, 0.15f);
+        if (rpg_get(&m->st, ST_HP) <= 0)
+            kill_mob(g, c, i);
+    }
 }
 
 static int inv_hit_grid(float mx, float my, float ox, float oy, int *out)
@@ -929,6 +1172,7 @@ static void *init(Canvas *c)
     g->snd_level = canvas_sound_tone(c, 880.0f, 160.0f, 0.45f);
     g->hover_loot = g->hover_mob = g->hover_place = g->target = g->loot_want = -1;
     g->walk_beat = -1;
+    g->pane_drag = -1;
     {
         unsigned seed = canvas_seed(c);
         if (!seed)
@@ -977,8 +1221,13 @@ static void update(void *state, Canvas *c, float dt)
         return;
     }
     crypt_bind();
+    pane_defaults(g, canvas_width(c), canvas_height(c));
     if (canvas_key_pressed(c, KEY_I) || canvas_key_pressed(c, KEY_TAB) || canvas_key_pressed(c, KEY_C))
         g->ui = (g->ui == UI_INV) ? UI_NONE : UI_INV;
+    if (canvas_key_pressed(c, KEY_L))
+        g->pane[PANE_LOG].open = !g->pane[PANE_LOG].open;
+    if (canvas_key_pressed(c, KEY_M))
+        g->pane[PANE_MAP].open = !g->pane[PANE_MAP].open;
     if (!g->dead) {
         static const CanvasKey kbar[RPG_BAR_N] = { KEY_1, KEY_2, KEY_3, KEY_4, KEY_5 };
         for (i = 0; i < RPG_BAR_N; i++) {
@@ -1023,9 +1272,58 @@ static void update(void *state, Canvas *c, float dt)
         bagx = px + 250.0f;
         bagy = py + 48.0f;
         book_origin(px, py, &bookx, &booky);
+        {
+            int i;
+            float wheel;
+
+            g->pane_eat = 0;
+            pane_clamp(&g->pane[PANE_LOG], W, H);
+            pane_clamp(&g->pane[PANE_MAP], W, H);
+            for (i = 0; i < PANE_N; i++) {
+                if (pane_over(&g->pane[i], mx, my))
+                    g->pane_eat = 1;
+            }
+            if (g->pane_drag >= 0 && g->pane_drag < PANE_N) {
+                if (canvas_mouse_down(c, 1)) {
+                    g->pane[g->pane_drag].x = mx - g->pane_gx;
+                    g->pane[g->pane_drag].y = my - g->pane_gy;
+                    pane_clamp(&g->pane[g->pane_drag], W, H);
+                } else
+                    g->pane_drag = -1;
+            } else if (canvas_mouse_pressed(c, 1)) {
+                for (i = PANE_N - 1; i >= 0; i--) {
+                    if (pane_close_at(&g->pane[i], mx, my)) {
+                        g->pane[i].open = 0;
+                        break;
+                    }
+                    if (pane_title(&g->pane[i], mx, my)) {
+                        g->pane_drag = i;
+                        g->pane_gx = mx - g->pane[i].x;
+                        g->pane_gy = my - g->pane[i].y;
+                        break;
+                    }
+                }
+            }
+            wheel = canvas_wheel(c);
+            if (wheel != 0.0f && pane_over(&g->pane[PANE_LOG], mx, my)) {
+                int vis = (int)((g->pane[PANE_LOG].h - PANE_TITLE - 8.0f) / 13.0f);
+                int maxs;
+
+                if (vis < 1)
+                    vis = 1;
+                maxs = g->log_n - vis;
+                if (maxs < 0)
+                    maxs = 0;
+                g->log_scroll += (wheel > 0.0f) ? 1 : -1;
+                if (g->log_scroll < 0)
+                    g->log_scroll = 0;
+                if (g->log_scroll > maxs)
+                    g->log_scroll = maxs;
+            }
+        }
         if (canvas_mouse_pressed(c, 2) && bar_hit(W, H, mx, my, &bslot))
             rpg_bar_unbind(&g->pc.bar, bslot);
-        if (canvas_mouse_pressed(c, 1) && !g->drag_src) {
+        if (canvas_mouse_pressed(c, 1) && !g->drag_src && !g->pane_eat && !pane_blocks(g, mx, my)) {
             if (bar_hit(W, H, mx, my, &bslot) && g->pc.bar.slot[bslot].type != RPG_BAR_EMPTY)
                 drag_begin(g, DRAG_BAR, bslot, mx, my);
             else if (g->ui == UI_INV && inv_hit_grid(mx, my, bagx, bagy, &gi) &&
@@ -1092,7 +1390,9 @@ static void update(void *state, Canvas *c, float dt)
         }
         if (canvas_mouse_pressed(c, 1) && !g->drag_src) {
             int bslot;
-            if (bar_hit(canvas_width(c), canvas_height(c), (float)canvas_mouse_x(c), (float)canvas_mouse_y(c),
+            if (g->pane_eat || pane_blocks(g, (float)canvas_mouse_x(c), (float)canvas_mouse_y(c))) {
+                /* click is for a floating pane */
+            } else if (bar_hit(canvas_width(c), canvas_height(c), (float)canvas_mouse_x(c), (float)canvas_mouse_y(c),
                         &bslot)) {
                 /* click is for the hotbar, not the world */
             } else if (g->hover_mob >= 0) {
@@ -1172,6 +1472,7 @@ static void update(void *state, Canvas *c, float dt)
 
     g->attack_cd -= dt;
     move_hero(g, dt);
+    tick_terrain(g, c, dt);
     if (!rpg_zone_safe(g->world.zone)) {
         hero_swing(g, c);
         mob_ai(g, c, dt);
@@ -1335,6 +1636,15 @@ static void render_world(Arpg *g, Canvas *c)
                 cell = -1;
             if (cell >= 0)
                 canvas_draw_sheet(c, ts, cell, tx * TILE, ty * TILE, TILE + 1.0f, TILE + 1.0f);
+            {
+                int kind = dungeon_get(cmap(g), tx, ty);
+                if (kind == CRYPT_LAVA)
+                    canvas_fill_rect(c, tx * TILE, ty * TILE, TILE, TILE, 0.92f, 0.28f, 0.08f, 0.42f);
+                else if (kind == CRYPT_MUD)
+                    canvas_fill_rect(c, tx * TILE, ty * TILE, TILE, TILE, 0.30f, 0.34f, 0.10f, 0.40f);
+                else if (kind == CRYPT_ICE)
+                    canvas_fill_rect(c, tx * TILE, ty * TILE, TILE, TILE, 0.55f, 0.80f, 0.95f, 0.34f);
+            }
             if (!lit_tile(g, tx, ty))
                 canvas_fill_rect(c, tx * TILE, ty * TILE, TILE, TILE, 0, 0, 0, 0.55f);
         }
@@ -1479,9 +1789,123 @@ static void bar(Canvas *c, float x, float y, float w, float h, float t, float r,
         canvas_draw_text(c, x + 6, y + h - 4, label, 0.97f, 0.98f, 0.95f);
 }
 
+static void draw_pane_frame(Canvas *c, const Pane *p, const char *title, int hi)
+{
+    canvas_fill_rect(c, p->x, p->y, p->w, p->h, 0.04f, 0.04f, 0.05f, 0.36f);
+    canvas_fill_rect(c, p->x, p->y, p->w, PANE_TITLE, 0.07f, 0.06f, 0.05f, 0.5f);
+    canvas_stroke_rect(c, p->x, p->y, p->w, p->h, hi ? 0.88f : 0.48f, hi ? 0.72f : 0.4f, hi ? 0.38f : 0.26f, 0.55f);
+    canvas_draw_text(c, p->x + 8.0f, p->y + 13.0f, title, 0.88f, 0.82f, 0.62f);
+    canvas_draw_text(c, p->x + p->w - 14.0f, p->y + 13.0f, "x", 0.72f, 0.55f, 0.45f);
+}
+
+static void draw_log_pane(Arpg *g, Canvas *c, float mx, float my)
+{
+    const Pane *p = &g->pane[PANE_LOG];
+    int vis, start, i, n;
+    float y;
+
+    if (!p->open)
+        return;
+    draw_pane_frame(c, p, "Log   L", pane_over(p, mx, my) || g->pane_drag == PANE_LOG);
+    vis = (int)((p->h - PANE_TITLE - 8.0f) / 13.0f);
+    if (vis < 1)
+        vis = 1;
+    n = g->log_n;
+    start = n - vis - g->log_scroll;
+    if (start < 0)
+        start = 0;
+    y = p->y + PANE_TITLE + 14.0f;
+    for (i = 0; i < vis && start + i < n; i++) {
+        const LogLine *L = log_at(g, start + i);
+        if (L)
+            canvas_draw_text(c, p->x + 8.0f, y + (float)i * 13.0f, L->t, L->r, L->g, L->b);
+    }
+}
+
+static void draw_map_pane(Arpg *g, Canvas *c, float mx, float my)
+{
+    const Pane *p = &g->pane[PANE_MAP];
+    float ox, oy, s, inner_w, inner_h;
+    int tx, ty, i;
+
+    if (!p->open)
+        return;
+    draw_pane_frame(c, p, "Map   M", pane_over(p, mx, my) || g->pane_drag == PANE_MAP);
+    inner_w = p->w - 10.0f;
+    inner_h = p->h - PANE_TITLE - 10.0f;
+    s = inner_w / (float)DUN_W;
+    if (inner_h / (float)DUN_H < s)
+        s = inner_h / (float)DUN_H;
+    if (s < 1.0f)
+        s = 1.0f;
+    ox = p->x + 5.0f;
+    oy = p->y + PANE_TITLE + 5.0f;
+    for (ty = 0; ty < DUN_H; ty++) {
+        for (tx = 0; tx < DUN_W; tx++) {
+            if (!tile_seen(g, tx, ty))
+                continue;
+            if (dungeon_walk(cmap(g), tx, ty)) {
+                int kind = dungeon_get(cmap(g), tx, ty);
+                float r = 0.36f, gg = 0.28f, b = 0.22f;
+                if (g->world.zone == RPG_ZONE_TOWN) {
+                    r = 0.42f;
+                    gg = 0.38f;
+                    b = 0.26f;
+                } else if (g->world.zone == RPG_ZONE_OVERWORLD) {
+                    r = 0.26f;
+                    gg = 0.42f;
+                    b = 0.22f;
+                }
+                if (kind == CRYPT_LAVA) {
+                    r = 0.88f;
+                    gg = 0.28f;
+                    b = 0.10f;
+                } else if (kind == CRYPT_MUD) {
+                    r = 0.32f;
+                    gg = 0.30f;
+                    b = 0.10f;
+                } else if (kind == CRYPT_ICE) {
+                    r = 0.50f;
+                    gg = 0.78f;
+                    b = 0.92f;
+                }
+                canvas_fill_rect(c, ox + tx * s, oy + ty * s, s, s, r, gg, b, 0.55f);
+            } else
+                canvas_fill_rect(c, ox + tx * s, oy + ty * s, s, s, 0.12f, 0.1f, 0.1f, 0.4f);
+        }
+    }
+    for (i = 0; i < g->world.place_n[g->world.zone]; i++) {
+        RpgPlace *pl = &g->world.places[g->world.zone][i];
+        float r = 0.7f, gg = 0.5f, b = 0.9f;
+        if (!tile_seen(g, pl->tx, pl->ty))
+            continue;
+        if (pl->kind == RPG_PLACE_GATE) {
+            r = 0.9f;
+            gg = 0.7f;
+            b = 0.3f;
+        } else if (pl->kind == RPG_PLACE_PORTAL) {
+            r = 0.7f;
+            gg = 0.3f;
+            b = 0.85f;
+        }
+        canvas_fill_rect(c, ox + pl->tx * s, oy + pl->ty * s, s > 2.0f ? s : 2.0f, s > 2.0f ? s : 2.0f, r, gg, b, 0.85f);
+    }
+    for (i = 0; i < g->mob_n; i++) {
+        if (!g->mobs[i].alive)
+            continue;
+        dungeon_pos_tile(g->mobs[i].x, g->mobs[i].y, &tx, &ty);
+        if (!tile_seen(g, tx, ty))
+            continue;
+        canvas_fill_rect(c, ox + (float)tx * s, oy + (float)ty * s, s > 2.0f ? s : 2.0f, s > 2.0f ? s : 2.0f, 0.85f,
+                         0.2f, 0.18f, 0.8f);
+    }
+    canvas_fill_rect(c, ox + g->spr.x / TILE * s - 1.0f, oy + g->spr.y / TILE * s - 1.0f, 3.0f, 3.0f, 0.95f, 0.9f, 0.4f,
+                     1.0f);
+}
+
 static void render_hud(Arpg *g, Canvas *c)
 {
-    int W = canvas_width(c), H = canvas_height(c), tx, ty;
+    int W = canvas_width(c), H = canvas_height(c), tx;
     char line[128];
     float hp = LS(g, ST_HPMAX) ? (float)LS(g, ST_HP) / (float)LS(g, ST_HPMAX) : 0;
     float mp = LS(g, ST_MPMAX) ? (float)LS(g, ST_MP) / (float)LS(g, ST_MPMAX) : 0;
@@ -1551,10 +1975,11 @@ static void render_hud(Arpg *g, Canvas *c)
             canvas_draw_text(c, sx + 3, by + 11, n, 0.9f, 0.85f, 0.7f);
         }
     }
-    snprintf(line, sizeof(line), "%d-%d dmg   armor %d   STR %d  DEX %d  MAG %d  VIT %d", LS(g, ST_DMIN),
-             LS(g, ST_DMAX), LS(g, ST_ARMOR), LS(g, ST_STR), LS(g, ST_DEX), LS(g, ST_MAG), LS(g, ST_VIT));
+    snprintf(line, sizeof(line), "%d-%d dmg  ac %d  hit %d  dodge %d  parry %d  blk %d   STR %d DEX %d MAG %d VIT %d",
+             LS(g, ST_DMIN), LS(g, ST_DMAX), LS(g, ST_ARMOR), LS(g, ST_HIT), LS(g, ST_DODGE), LS(g, ST_PARRY),
+             LS(g, ST_BLOCK), LS(g, ST_STR), LS(g, ST_DEX), LS(g, ST_MAG), LS(g, ST_VIT));
     canvas_draw_text(c, 520, (float)H - 28, line, 0.85f, 0.85f, 0.8f);
-    canvas_draw_text(c, 520, (float)H - 12, "1-5 use   I bag   drag onto 1-5", 0.55f, 0.55f, 0.5f);
+    canvas_draw_text(c, 520, (float)H - 12, "1-5 use   I bag   L log   M map   drag onto 1-5", 0.55f, 0.55f, 0.5f);
     if (g->note_t > 0.0f)
         canvas_draw_text(c, (float)W * 0.5f - 80, (float)H - 72, g->note, 0.95f, 0.9f, 0.55f);
     {
@@ -1564,39 +1989,8 @@ static void render_hud(Arpg *g, Canvas *c)
                              0.35f);
     }
 
-    /* minimap */
-    {
-        float ox = (float)W - 132, oy = 32, s = 1.7f;
-        canvas_fill_rect(c, ox - 4, oy - 4, DUN_W * s + 8, DUN_H * s + 8, 0, 0, 0, 0.65f);
-        for (ty = 0; ty < DUN_H; ty++) {
-            for (tx = 0; tx < DUN_W; tx++) {
-                if (!tile_seen(g, tx, ty) || !dungeon_walk(cmap(g), tx, ty))
-                    continue;
-                if (g->world.zone == RPG_ZONE_TOWN)
-                    canvas_fill_rect(c, ox + tx * s, oy + ty * s, s, s, 0.35f, 0.32f, 0.22f, 0.9f);
-                else if (g->world.zone == RPG_ZONE_OVERWORLD)
-                    canvas_fill_rect(c, ox + tx * s, oy + ty * s, s, s, 0.22f, 0.38f, 0.18f, 0.9f);
-                else
-                    canvas_fill_rect(c, ox + tx * s, oy + ty * s, s, s, 0.28f, 0.22f, 0.18f, 0.9f);
-            }
-        }
-        canvas_fill_rect(c, ox + g->spr.x / TILE * s - 1, oy + g->spr.y / TILE * s - 1, 3, 3, 0.95f, 0.9f, 0.4f, 1);
-        for (tx = 0; tx < g->world.place_n[g->world.zone]; tx++) {
-            RpgPlace *p = &g->world.places[g->world.zone][tx];
-            float r = 0.7f, gg = 0.5f, b = 0.9f;
-            if (p->kind == RPG_PLACE_GATE) {
-                r = 0.9f;
-                gg = 0.7f;
-                b = 0.3f;
-            }
-            if (p->kind == RPG_PLACE_PORTAL) {
-                r = 0.7f;
-                gg = 0.3f;
-                b = 0.85f;
-            }
-            canvas_fill_rect(c, ox + p->tx * s, oy + p->ty * s, 2, 2, r, gg, b, 1);
-        }
-    }
+    draw_log_pane(g, c, (float)mx, (float)my);
+    draw_map_pane(g, c, (float)mx, (float)my);
 
     if (g->hover_loot >= 0 && g->ground.pile[g->hover_loot].on) {
         RpgLoot *L = &g->ground.pile[g->hover_loot];
@@ -1636,8 +2030,9 @@ static void render_hud(Arpg *g, Canvas *c)
         snprintf(line, sizeof(line), "Lv %d   STR %d  DEX %d  MAG %d  VIT %d", LS(g, ST_LV), LS(g, ST_STR), LS(g, ST_DEX),
                  LS(g, ST_MAG), LS(g, ST_VIT));
         canvas_draw_text(c, px, py + 20, line, 0.82f, 0.8f, 0.72f);
-        snprintf(line, sizeof(line), "HP %d/%d   MP %d/%d   %d-%d dmg   armor %d", LS(g, ST_HP), LS(g, ST_HPMAX),
-                 LS(g, ST_MP), LS(g, ST_MPMAX), LS(g, ST_DMIN), LS(g, ST_DMAX), LS(g, ST_ARMOR));
+        snprintf(line, sizeof(line), "HP %d/%d   MP %d/%d   %d-%d dmg  ac %d  hit %d dodge %d parry %d", LS(g, ST_HP),
+                 LS(g, ST_HPMAX), LS(g, ST_MP), LS(g, ST_MPMAX), LS(g, ST_DMIN), LS(g, ST_DMAX), LS(g, ST_ARMOR),
+                 LS(g, ST_HIT), LS(g, ST_DODGE), LS(g, ST_PARRY));
         canvas_draw_text(c, px, py + 38, line, 0.7f, 0.78f, 0.62f);
         if (g->portrait)
             canvas_blit(c, g->portrait, px, py + 56, 72, 72, 0, 0, 1, 1, 1, 1, 1, 1);

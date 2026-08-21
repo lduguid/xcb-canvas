@@ -44,6 +44,10 @@ const CryptTune Crypt = {
         .dmg_str_div_min = 4, /* +STR/n min dmg */
         .dmg_str_div_max = 3,
         .ac_dex_div = 8, /* +DEX/n armor */
+        .hit_dex_div = 2, /* +DEX/n to-hit */
+        .dodge_div = 6,
+        .parry_div = 10,
+        .aspd_div = 5, /* +DEX/n haste % */
     },
     .on_level = {
         .str = 2,
@@ -56,16 +60,19 @@ const CryptTune Crypt = {
         .per_sq = 18, /* 60 + level^2 * 18 */
     },
 
-    /* to-hit and crit */
+    /* combat script clamps (chances live on ST_HIT / ST_DODGE / …) */
     .melee = {
         .hit_base = 70,
-        .hit_dex_div = 2, /* + (atkDEX - defDEX) / n */
         .hit_min = 30,
         .hit_max = 94,
-        .armor_div = 5, /* damage minus AC/n */
+        .avoid_max = 55,
+        .resist_cap = 75,
+        .armor_div = 5, /* damage minus (AC - pen) / n */
         .crit_base = 5,
         .crit_dex_div = 20,
-        .crit_bonus_pct = 50, /* +50% dmg */
+        .crit_bonus_pct = 50, /* default crit damage % */
+        .crit_max = 60,
+        .block_min = 1,
     },
 
     .potion = {
@@ -114,6 +121,9 @@ const CryptTune Crypt = {
         .arm = 4,
         .helm = 2,
         .shld = 3,
+        .shld_block = 12,
+        .shld_blkamt = 4,
+        .wpn_parry = 6,
     },
     .affix = {
         .str_lo = 2, .str_hi = 6,
@@ -125,6 +135,10 @@ const CryptTune Crypt = {
         .life_lo = 6, .life_hi = 18,
         .mana_lo = 4, .mana_hi = 14,
         .mag_lo = 1, .mag_hi = 4,
+        .hit_lo = 3, .hit_hi = 8,
+        .dodge_lo = 2, .dodge_hi = 6,
+        .crit_lo = 2, .crit_hi = 6,
+        .resist_lo = 4, .resist_hi = 12,
     },
 
     /* how depth / champion scale a species row */
@@ -175,6 +189,25 @@ const CryptTune Crypt = {
         .swing_max = 0.55f,
         .mob_swing = 0.70f,
         .death_gold_div = 10, /* lose gold/n */
+    },
+
+    /* walkable floor variants. speed/power apply live (F5). spots need a new map. */
+    .terrain = {
+        .lava_spots = 5,
+        .mud_spots = 6,
+        .ice_spots = 3,
+        .wilds_mud = 8,
+        .wilds_ice = 4,
+        .town_mud = 2,
+        .blob = 2,
+        .lava_cost = 8,
+        .lava_speed = 80,
+        .lava_power = 7,
+        .mud_cost = 3,
+        .mud_speed = 42,
+        .ice_cost = 1,
+        .ice_speed = 128,
+        .tick = 0.45f,
     },
 };
 
