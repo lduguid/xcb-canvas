@@ -278,13 +278,58 @@ static int use_item(RpgStats *live, RpgItem *it)
     return n;
 }
 
+static void cat_mod(char *buf, size_t n, int v, const char *label)
+{
+    char bit[40];
+    size_t len;
+
+    if (!v || !buf || n < 2)
+        return;
+    snprintf(bit, sizeof(bit), "  %+d %s", v, label);
+    len = strlen(buf);
+    if (len + strlen(bit) < n)
+        memcpy(buf + len, bit, strlen(bit) + 1);
+}
+
 static void describe(const RpgItem *it, char *buf, size_t n)
 {
-    snprintf(buf, n,
-             "%s   %+d-%d dmg  %+d ac  %+d hit %+d dodge %+d parry %+d blk  %+d str %+d dex %+d vit  %+d life",
-             it->name, it->mods[ST_DMIN], it->mods[ST_DMAX], it->mods[ST_ARMOR], it->mods[ST_HIT], it->mods[ST_DODGE],
-             it->mods[ST_PARRY], it->mods[ST_BLOCK], it->mods[ST_STR], it->mods[ST_DEX], it->mods[ST_VIT],
-             it->mods[ST_LIFE]);
+    if (!it || !buf || n < 2)
+        return;
+    if (it->kind == IT_HPOT) {
+        snprintf(buf, n, "%s   drink to restore life", it->name);
+        return;
+    }
+    if (it->kind == IT_MPOT) {
+        snprintf(buf, n, "%s   drink to restore mana", it->name);
+        return;
+    }
+    snprintf(buf, n, "%s", it->name);
+    if (it->mods[ST_DMIN] || it->mods[ST_DMAX]) {
+        char bit[40];
+        size_t len;
+        snprintf(bit, sizeof(bit), "  %+d-%d dmg", it->mods[ST_DMIN], it->mods[ST_DMAX]);
+        len = strlen(buf);
+        if (len + strlen(bit) < n)
+            memcpy(buf + len, bit, strlen(bit) + 1);
+    }
+    cat_mod(buf, n, it->mods[ST_ARMOR], "ac");
+    cat_mod(buf, n, it->mods[ST_HIT], "hit");
+    cat_mod(buf, n, it->mods[ST_DODGE], "dodge");
+    cat_mod(buf, n, it->mods[ST_PARRY], "parry");
+    cat_mod(buf, n, it->mods[ST_BLOCK], "blk");
+    cat_mod(buf, n, it->mods[ST_BLKAMT], "blkamt");
+    cat_mod(buf, n, it->mods[ST_CRIT], "crit");
+    cat_mod(buf, n, it->mods[ST_STR], "str");
+    cat_mod(buf, n, it->mods[ST_DEX], "dex");
+    cat_mod(buf, n, it->mods[ST_VIT], "vit");
+    cat_mod(buf, n, it->mods[ST_MAG], "mag");
+    cat_mod(buf, n, it->mods[ST_LIFE], "life");
+    cat_mod(buf, n, it->mods[ST_MANA], "mana");
+    cat_mod(buf, n, it->mods[ST_RPHYS], "rphys");
+    cat_mod(buf, n, it->mods[ST_RFIRE], "rfire");
+    cat_mod(buf, n, it->mods[ST_RCOLD], "rcold");
+    cat_mod(buf, n, it->mods[ST_RLIT], "rlit");
+    cat_mod(buf, n, it->mods[ST_RPOIS], "rpois");
 }
 
 static int kind_slot(int kind)
@@ -776,6 +821,7 @@ static void build_town(RpgWorld *w)
     rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_VENDOR, 30, 28, "Trader", "Space — buy / sell");
     rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_BANK, 42, 28, "Stash", "Space — bank");
     rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_QUEST, 36, 22, "Notice board", "Space — contracts");
+    rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_CAMP, 36, 36, "Camp", "Space — rest (life and mana)");
     p = rpg_world_add_place(w, RPG_ZONE_TOWN, RPG_PLACE_GATE, 36, 58, "Town gate", "Space — leave town");
     if (p)
         p->dest_zone = RPG_ZONE_OVERWORLD;

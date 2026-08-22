@@ -27,6 +27,7 @@
 #define LOG_MAX 80
 #define LOG_LEN 72
 #define PANE_TITLE 18.0f
+#define DUN_KEEP_N 8
 
 enum { UI_NONE = 0, UI_INV, UI_VENDOR, UI_BANK, UI_QUEST };
 enum { DRAG_NONE = 0, DRAG_BAG, DRAG_BAR, DRAG_BOOK };
@@ -53,6 +54,15 @@ typedef struct {
 } Pane;
 
 typedef struct {
+    int on, id, depth, mob_n, place_n, seq;
+    Dungeon map;
+    unsigned char seen[DUN_H][DUN_W];
+    RpgPlace places[RPG_PLACE_MAX];
+    RpgActor mobs[MOB_MAX];
+    RpgGround ground;
+} DunKeep;
+
+typedef struct {
     RpgWorld world;
     RpgHero pc;
     RpgGround ground, ow_ground;
@@ -64,9 +74,10 @@ typedef struct {
     Fx fx[FX_MAX];
     Blood blood[BLOOD_MAX];
     RpgActor ow_mobs[MOB_MAX];
+    DunKeep dun_keep[DUN_KEEP_N];
     int ui, dead, quit_ask, hover_loot, hover_mob, hover_place;
     int target, loot_want, has_dest, mob_n;
-    int ow_ready, ow_mob_n, drag_src, drag_i, drag_live;
+    int ow_ready, ow_mob_n, dun_seq, drag_src, drag_i, drag_live;
     float dest_x, dest_y, attack_cd, bob, step_t, dead_t, note_t, walk_gait, haz_t, haz_say;
     float drag_px, drag_py;
     int walk_beat, log_n, log_head, log_scroll, pane_drag, pane_eat;
@@ -425,6 +436,82 @@ static void snapshot_overworld(Arpg *g)
     g->ow_ready = 1;
 }
 
+static int dungeon_floor_clear(const DunKeep *k)
+{
+    int i;
+
+    if (!k || !k->on)
+        return 1;
+    for (i = 0; i < k->mob_n; i++) {
+        if (k->mobs[i].alive)
+            return 0;
+    }
+    return 1;
+}
+
+static DunKeep *dungeon_find(Arpg *g, int id, int depth)
+{
+    int i;
+
+    for (i = 0; i < DUN_KEEP_N; i++) {
+        if (g->dun_keep[i].on && g->dun_keep[i].id == id && g->dun_keep[i].depth == depth)
+            return &g->dun_keep[i];
+    }
+    return NULL;
+}
+
+static DunKeep *dungeon_slot(Arpg *g, int id, int depth)
+{
+    DunKeep *k = dungeon_find(g, id, depth);
+    int i, oldest;
+
+    if (k)
+        return k;
+    for (i = 0; i < DUN_KEEP_N; i++) {
+        if (!g->dun_keep[i].on)
+            return &g->dun_keep[i];
+    }
+    oldest = 0;
+    for (i = 1; i < DUN_KEEP_N; i++) {
+        if (g->dun_keep[i].seq < g->dun_keep[oldest].seq)
+            oldest = i;
+    }
+    return &g->dun_keep[oldest];
+}
+
+static void dungeon_put(Arpg *g)
+{
+    DunKeep *k;
+
+    if (g->world.zone != RPG_ZONE_DUNGEON)
+        return;
+    k = dungeon_slot(g, g->world.dungeon_id, g->world.depth);
+    k->on = 1;
+    k->id = g->world.dungeon_id;
+    k->depth = g->world.depth;
+    k->map = g->world.maps[RPG_ZONE_DUNGEON];
+    memcpy(k->seen, g->world.seen[RPG_ZONE_DUNGEON], sizeof(k->seen));
+    memcpy(k->places, g->world.places[RPG_ZONE_DUNGEON], sizeof(k->places));
+    k->place_n = g->world.place_n[RPG_ZONE_DUNGEON];
+    memcpy(k->mobs, g->mobs, sizeof(k->mobs));
+    k->mob_n = g->mob_n;
+    k->ground = g->ground;
+    k->seq = ++g->dun_seq;
+}
+
+static void dungeon_load(Arpg *g, const DunKeep *k)
+{
+    g->world.maps[RPG_ZONE_DUNGEON] = k->map;
+    memcpy(g->world.seen[RPG_ZONE_DUNGEON], k->seen, sizeof(k->seen));
+    memcpy(g->world.places[RPG_ZONE_DUNGEON], k->places, sizeof(k->places));
+    g->world.place_n[RPG_ZONE_DUNGEON] = k->place_n;
+    g->world.dungeon_id = k->id;
+    g->world.depth = k->depth < 1 ? 1 : k->depth;
+    memcpy(g->mobs, k->mobs, sizeof(g->mobs));
+    g->mob_n = k->mob_n;
+    g->ground = k->ground;
+}
+
 static void cam_on_hero(Arpg *g, Canvas *c)
 {
     canvas_cam_bounds(c, 0, 0, DUN_W * TILE, DUN_H * TILE);
@@ -454,6 +541,7 @@ static void set_zone_title(Arpg *g, Canvas *c)
 static void enter_town(Arpg *g, Canvas *c, int at_gate)
 {
     RpgPlace *gate;
+    dungeon_put(g);
     snapshot_overworld(g);
     g->world.zone = RPG_ZONE_TOWN;
     memset(g->mobs, 0, sizeof(g->mobs));
@@ -474,6 +562,7 @@ static void enter_town(Arpg *g, Canvas *c, int at_gate)
 
 static void enter_overworld(Arpg *g, Canvas *c, float x, float y)
 {
+    dungeon_put(g);
     snapshot_overworld(g);
     g->world.zone = RPG_ZONE_OVERWORLD;
     clear_ephemeral(g);
@@ -494,7 +583,26 @@ static void enter_overworld(Arpg *g, Canvas *c, float x, float y)
 
 static void enter_dungeon(Arpg *g, Canvas *c, int id, int depth)
 {
+    DunKeep *k;
+
     snapshot_overworld(g);
+    dungeon_put(g);
+    if (depth < 1)
+        depth = 1;
+    k = dungeon_find(g, id, depth);
+    if (k && !dungeon_floor_clear(k)) {
+        dungeon_load(g, k);
+        g->world.zone = RPG_ZONE_DUNGEON;
+        clear_ephemeral(g);
+        g->spr.x = cmap(g)->start_tx * TILE + TILE * 0.5f;
+        g->spr.y = cmap(g)->start_ty * TILE + TILE * 0.5f;
+        refresh(g);
+        cam_on_hero(g, c);
+        set_zone_title(g, c);
+        return;
+    }
+    if (k)
+        k->on = 0;
     dungeon_gen(&g->world.maps[RPG_ZONE_DUNGEON], rpg_randu() ? rpg_randu() : 1u);
     crypt_paint_terrain(&g->world.maps[RPG_ZONE_DUNGEON], RPG_ZONE_DUNGEON, depth);
     memset(g->world.seen[RPG_ZONE_DUNGEON], 0, sizeof(g->world.seen[RPG_ZONE_DUNGEON]));
@@ -528,6 +636,13 @@ static void interact_place(Arpg *g, Canvas *c, int pi)
     case RPG_PLACE_QUEST:
         g->ui = (g->ui == UI_QUEST) ? UI_NONE : UI_QUEST;
         break;
+    case RPG_PLACE_CAMP: {
+        int hp = rpg_heal(&g->pc.live, 99999);
+        int mp = rpg_mana(&g->pc.live, 99999);
+        rpg_hero_sync(&g->pc);
+        say(g, c, (hp || mp) ? "Rested" : "Already rested");
+        break;
+    }
     case RPG_PLACE_GATE:
         if (p->dest_zone == RPG_ZONE_OVERWORLD) {
             dest = rpg_place_kind(&g->world, RPG_ZONE_OVERWORLD, RPG_PLACE_GATE);
@@ -1668,6 +1783,10 @@ static void render_world(Arpg *g, Canvas *c)
             r = 0.4f;
             gg = 0.55f;
             b = 0.95f;
+        } else if (p->kind == RPG_PLACE_CAMP) {
+            r = 0.92f;
+            gg = 0.42f;
+            b = 0.14f;
         } else if (p->kind == RPG_PLACE_GATE) {
             r = 0.55f;
             gg = 0.4f;
@@ -1883,6 +2002,10 @@ static void draw_map_pane(Arpg *g, Canvas *c, float mx, float my)
             r = 0.9f;
             gg = 0.7f;
             b = 0.3f;
+        } else if (pl->kind == RPG_PLACE_CAMP) {
+            r = 0.92f;
+            gg = 0.42f;
+            b = 0.14f;
         } else if (pl->kind == RPG_PLACE_PORTAL) {
             r = 0.7f;
             gg = 0.3f;
@@ -1906,7 +2029,7 @@ static void draw_map_pane(Arpg *g, Canvas *c, float mx, float my)
 static void render_hud(Arpg *g, Canvas *c)
 {
     int W = canvas_width(c), H = canvas_height(c), tx;
-    char line[128];
+    char line[192];
     float hp = LS(g, ST_HPMAX) ? (float)LS(g, ST_HP) / (float)LS(g, ST_HPMAX) : 0;
     float mp = LS(g, ST_MPMAX) ? (float)LS(g, ST_MP) / (float)LS(g, ST_MPMAX) : 0;
     float xp = LS(g, ST_NEXT) ? (float)LS(g, ST_XP) / (float)LS(g, ST_NEXT) : 0;
@@ -2083,8 +2206,8 @@ static void render_hud(Arpg *g, Canvas *c)
     if (g->ui == UI_VENDOR) {
         float ox = (float)W * 0.5f - 180.0f, oy = (float)H * 0.5f - 140.0f;
         int i, gi;
-        canvas_fill_rect(c, ox - 24, oy - 36, 420, 280, 0.06f, 0.05f, 0.04f, 0.93f);
-        canvas_stroke_rect(c, ox - 24, oy - 36, 420, 280, 0.35f, 0.55f, 0.3f, 1.0f);
+        canvas_fill_rect(c, ox - 24, oy - 36, 520, 310, 0.06f, 0.05f, 0.04f, 0.93f);
+        canvas_stroke_rect(c, ox - 24, oy - 36, 520, 310, 0.35f, 0.55f, 0.3f, 1.0f);
         snprintf(line, sizeof(line), "Trader    %d gold    click stock to buy, pack to sell", LS(g, ST_GOLD));
         canvas_draw_text(c, ox - 8, oy - 16, line, 0.85f, 0.9f, 0.7f);
         for (i = 0; i < RPG_VENDOR_N; i++)
@@ -2093,16 +2216,25 @@ static void render_hud(Arpg *g, Canvas *c)
             int col = i % rpg_inv_w(), row = i / rpg_inv_w();
             draw_item_swatch(c, g, &g->pc.inv.grid[i], ox + col * 36.0f, oy + 56.0f + row * 36.0f, 34);
         }
-        canvas_draw_text(c, ox, oy + 220, "Space closes", 0.5f, 0.48f, 0.42f);
+        canvas_draw_text(c, ox, oy + 210, "Space closes", 0.5f, 0.48f, 0.42f);
         gi = (int)(((float)mx - ox) / 36.0f);
         if ((float)my >= oy && (float)my < oy + 34.0f && gi >= 0 && gi < RPG_VENDOR_N &&
             rpg_item_ok(&g->world.vendor[gi])) {
             RpgItem *it = &g->world.vendor[gi];
-            snprintf(line, sizeof(line), "%s   buy %d gold", it->name, rpg_item_price(it));
-            canvas_draw_text(c, ox, oy + 238, line, 0.9f, 0.85f, 0.5f);
+            float r, gg, b;
+            rarity_rgb(it->rarity, &r, &gg, &b);
+            rpg_item_desc(it, line, sizeof(line));
+            canvas_draw_text(c, ox - 8, oy + 228, line, r, gg, b);
+            snprintf(line, sizeof(line), "buy %d gold", rpg_item_price(it));
+            canvas_draw_text(c, ox - 8, oy + 246, line, 0.9f, 0.85f, 0.5f);
         } else if (inv_hit_grid((float)mx, (float)my, ox, oy + 56.0f, &gi) && rpg_item_ok(&g->pc.inv.grid[gi])) {
-            snprintf(line, sizeof(line), "%s   sell %d gold", g->pc.inv.grid[gi].name, rpg_item_value(&g->pc.inv.grid[gi]));
-            canvas_draw_text(c, ox, oy + 238, line, 0.85f, 0.8f, 0.55f);
+            RpgItem *it = &g->pc.inv.grid[gi];
+            float r, gg, b;
+            rarity_rgb(it->rarity, &r, &gg, &b);
+            rpg_item_desc(it, line, sizeof(line));
+            canvas_draw_text(c, ox - 8, oy + 228, line, r, gg, b);
+            snprintf(line, sizeof(line), "sell %d gold", rpg_item_value(it));
+            canvas_draw_text(c, ox - 8, oy + 246, line, 0.85f, 0.8f, 0.55f);
         }
     }
 

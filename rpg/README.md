@@ -224,7 +224,7 @@ Gold is added to live and base. A successful take refreshes the hero. The game d
 
 Three zones: `RPG_ZONE_TOWN`, `RPG_ZONE_OVERWORLD`, `RPG_ZONE_DUNGEON`. Only town is `rpg_zone_safe`. Each zone has its own `Dungeon`, fog (`seen[zone][ty][tx]`), and place list.
 
-Places (`RpgPlace`): `kind`, tile `tx,ty`, optional `dest_zone` / `dest_id` / `dest_depth`, `name`, `prompt`. Kinds are `VENDOR`, `BANK`, `QUEST`, `GATE`, `PORTAL`, `EXIT`, `STAIRS`. The engine stores them; the game decides what Space does.
+Places (`RpgPlace`): `kind`, tile `tx,ty`, optional `dest_zone` / `dest_id` / `dest_depth`, `name`, `prompt`. Kinds are `VENDOR`, `BANK`, `QUEST`, `CAMP`, `GATE`, `PORTAL`, `EXIT`, `STAIRS`. The engine stores them; the game decides what Space does (buy, rest, enter, …).
 
 `rpg_world_add_place` returns `NULL` if that zone already has `RPG_PLACE_MAX` places. `rpg_place_near(world, x, y, rad)` uses tile centers (`dungeon_tile_pos`). `rpg_place_kind` finds the first of that kind in a zone.
 
@@ -293,7 +293,8 @@ Every step calls `rpg_actor_note_move`, which sets `vx,vy`, `face` (`±1`), and 
 - Draw, input, audio, HUD (bag, spellbook, hotbar, talent screen)
 - Cast when `rpg_bar_activate` returns `−1`
 - Combat scripts and which stats they read; apply HP and VFX from `RpgHit` after `rpg_ai_step`
-- Interpret places (open vendor, enter portal, …)
+- Interpret places (open vendor, rest, enter portal, …)
+- Snapshot dungeon floors if leave/return should keep mobs, loot, and fog
 - Choose tilesets; world size is always 32-unit tiles
 
 ## License
